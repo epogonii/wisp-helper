@@ -2,8 +2,8 @@
 
 """Stands in for snapper in the D-Bus tests.
 
-The tests copy it next to state.json, which holds the configs, and read back
-calls.json to see what the helper ran.
+The tests copy it next to state.json, which holds the configs and their
+snapshots, and read back calls.json to see what the helper ran.
 """
 
 import json
@@ -53,10 +53,19 @@ def main(args):
         configs[config].update(value.split('=', 1) for value in rest)
     elif command == 'delete-config' and not rest:
         del configs[config]
+    elif command == 'list' and jsonout:
+        # A new config has only the running system, 0.
+        numbers = state['snapshots'].get(config, [0])
+        print(json.dumps({config: [{'number': number} for number in numbers]}))
+    elif command == 'undochange' and rest[0] == '-i':
+        # The helper deletes the list afterwards, so what it held is kept here.
+        path = Path(rest[1])
+        mode = oct(path.stat().st_mode & 0o777)
+        state['undone'].append([rest[2], mode, path.read_text(encoding='utf-8')])
     else:
         fail(f'unexpected call: {args}')
     # A read may run next to a change, so only changes write.
-    if command in ('create-config', 'set-config', 'delete-config'):
+    if command in ('create-config', 'set-config', 'delete-config', 'undochange'):
         STATE.write_text(json.dumps(state))
 
 

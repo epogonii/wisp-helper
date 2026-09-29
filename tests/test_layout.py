@@ -4,7 +4,7 @@ import pytest
 
 from wisp_helper import layout
 
-# The helper's own mountinfo on Fedora 45, where /tmp and /var/tmp are PrivateTmp's.
+# Fedora 45 as a service with PrivateTmp sees it, with /tmp and /var/tmp of its own.
 FEDORA = rb"""
 609 227 0:36 /root / rw,relatime shared:591 master:1 - btrfs /dev/nvme0n1p3 rw,seclabel,compress=zstd:1,ssd,space_cache=v2,subvolid=287,subvol=/root
 854 609 0:50 / /tmp rw,nosuid,nodev shared:615 master:118 - tmpfs tmpfs rw,seclabel,nr_inodes=1048576,inode64,usrquota

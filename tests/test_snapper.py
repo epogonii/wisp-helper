@@ -1,12 +1,21 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 import json
+from pathlib import Path
 
 import pytest
 
 from wisp_helper import errors, snapper
 
 ADDED = {'ALLOW_USERS': 'ann', 'SYNC_ACL': 'yes'}
+
+
+@pytest.fixture
+def runtime(tmp_path, monkeypatch):
+    path = tmp_path / 'run'
+    path.mkdir()
+    monkeypatch.setattr(snapper, 'RUNTIME_DIR', str(path))
+    return path
 
 
 @pytest.fixture
@@ -59,6 +68,46 @@ def test_config_argv(fake, tmp_path):
     snapper.delete_config('srv')
     lines = (tmp_path / 'args').read_text().splitlines()
     assert lines == ['-c', 'srv', 'create-config', '/srv', '-c', 'srv', 'delete-config']
+
+
+def test_numbers(fake):
+    rows = [{'number': 0}, {'number': 3}, {'number': 12}]
+    fake(f"echo '{json.dumps({'home': rows})}'")
+    assert snapper.numbers('home') == {0, 3, 12}
+
+
+def test_undo_change(fake, tmp_path, runtime):
+    # The helper deletes the list once snapper is done, so the fake keeps a copy.
+    fake(f'printf "%s\\n" "$@" > "{tmp_path}/args"; /bin/cp -p "$5" "{tmp_path}/list"')
+    snapper.undo_change('home', 5, 0, ['/home/ann/a b', '/home/ann/ünal'])
+    *args, listed, numbers = (tmp_path / 'args').read_text().splitlines()
+    assert args == ['-c', 'home', 'undochange', '-i']
+    assert Path(listed).parent == runtime
+    assert numbers == '5..0'
+    copy = tmp_path / 'list'
+    assert copy.read_text(encoding='utf-8') == '/home/ann/a b\n/home/ann/ünal\n'
+    assert copy.stat().st_mode & 0o777 == 0o600
+    assert list(runtime.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    'script, message',
+    [
+        ('echo "Invalid snapshots." >&2; exit 1', 'Invalid snapshots.'),
+        # snapper goes on past a file it cannot put back and exits with 0.
+        (
+            'echo create:0 modify:2 delete:0; echo "failed to modify /etc/a" >&2;'
+            ' echo "failed to modify /etc/b" >&2',
+            'failed to modify /etc/a\nfailed to modify /etc/b',
+        ),
+    ],
+)
+def test_undo_change_failed(fake, runtime, script, message):
+    fake(script)
+    with pytest.raises(errors.Failed) as info:
+        snapper.undo_change('root', 5, 0, ['/etc/a', '/etc/b'])
+    assert str(info.value) == message
+    assert list(runtime.iterdir()) == []
 
 
 def test_failed(fake):

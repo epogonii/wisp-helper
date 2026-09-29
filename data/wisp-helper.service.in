@@ -11,12 +11,11 @@ ExecStart=@libexecdir@/wisp-helper
 RuntimeDirectory=wisp-helper
 RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
-PrivateTmp=yes
 PrivateMounts=yes
 ProtectKernelTunables=yes
-ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictAddressFamilies=AF_UNIX
 LockPersonality=yes
-# ProtectSystem, ProtectHome, RestrictSUIDSGID and PrivateDevices break
-# undochange or the swap rollback.
+# ProtectSystem, ProtectHome, PrivateTmp, ProtectKernelModules (it hides
+# /usr/lib/modules), RestrictSUIDSGID and PrivateDevices break undochange
+# or the swap rollback.

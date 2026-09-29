@@ -25,11 +25,13 @@ USER = pwd.getpwnam('nobody')
 
 LIST = ['--jsonout', 'list-configs']
 GET = ['--jsonout', '-c', 'root', 'get-config']
+NUMBERS = ['--jsonout', '-c', 'root', 'list', '--columns', 'number']
 
 CONFIGS = {
     'root': {'SUBVOLUME': '/', 'ALLOW_USERS': '', 'SYNC_ACL': 'no'},
     'home': {'SUBVOLUME': '/home', 'ALLOW_USERS': '', 'SYNC_ACL': 'no'},
 }
+SNAPSHOTS = {'root': [0, 1, 2], 'home': [0, 3]}
 
 # /srv is the one subvolume left without a config.
 MOUNTINFO = """\
@@ -132,11 +134,23 @@ class Snapper:
         self.set(CONFIGS)
 
     def set(self, configs, fail=None, sleep=0):
-        state = {'configs': configs, 'fail': fail or {}, 'sleep': sleep}
+        state = {
+            'configs': configs,
+            'snapshots': SNAPSHOTS,
+            'undone': [],
+            'fail': fail or {},
+            'sleep': sleep,
+        }
         self.path.with_name('state.json').write_text(json.dumps(state))
 
+    def state(self):
+        return json.loads(self.path.with_name('state.json').read_text())
+
     def configs(self):
-        return json.loads(self.path.with_name('state.json').read_text())['configs']
+        return self.state()['configs']
+
+    def undone(self):
+        return self.state()['undone']
 
     def calls(self):
         path = self.path.with_name('calls.json')
@@ -184,7 +198,14 @@ def snapper(tmp_path):
 
 
 @pytest.fixture
-def launch(address, bus, polkit, snapper, tmp_path):
+def runtime(tmp_path):
+    path = tmp_path / 'run'
+    path.mkdir()
+    return path
+
+
+@pytest.fixture
+def launch(address, bus, polkit, snapper, runtime, tmp_path):
     processes = []
     mountinfo = tmp_path / 'mountinfo'
     mountinfo.write_text(MOUNTINFO)
@@ -193,6 +214,7 @@ def launch(address, bus, polkit, snapper, tmp_path):
         code = [
             'from wisp_helper import __main__, layout, polkit, service, snapper',
             f'snapper.SNAPPER = {str(snapper.path)!r}',
+            f'snapper.RUNTIME_DIR = {str(runtime)!r}',
             f'layout.MOUNTINFO = {str(mountinfo)!r}',
         ]
         if uid is not None:
@@ -235,8 +257,8 @@ def test_not_authorized(bus, helper, method):
 
 
 def test_authorized(bus, helper, polkit):
-    polkit.allow('undo-change')
-    assert refusal(bus, 'UndoChange') == 'Unsupported'
+    polkit.allow('set-maintenance')
+    assert refusal(bus, 'SetMaintenance') == 'Unsupported'
     assert refusal(bus, 'Rollback') == 'NotAuthorized'
 
 
@@ -427,3 +449,51 @@ def test_delete_config_unknown_config(bus, helper, polkit, snapper):
     assert refusal(bus, 'DeleteConfig', 'srv') == 'Invalid'
     assert polkit.calls() == []
     assert snapper.configs().keys() == {'root', 'home'}
+
+
+def test_undo_change(bus, helper, polkit, snapper, runtime):
+    polkit.allow('undo-change')
+    call(bus, 'UndoChange', 'home', 3, 0, ['/home/nobody/a b', '/home/nobody/ünal'])
+    *reads, undo = snapper.calls()
+    assert reads == [LIST, ['--jsonout', '-c', 'home', 'list', '--columns', 'number']]
+    assert undo[:4] == ['-c', 'home', 'undochange', '-i']
+    assert Path(undo[4]).parent == runtime
+    assert undo[5:] == ['3..0']
+    assert snapper.undone() == [['3..0', '0o600', '/home/nobody/a b\n/home/nobody/ünal\n']]
+    assert list(runtime.iterdir()) == []
+
+
+# Not a config, outside the config, nothing, the running system as from,
+# the same twice, a snapshot that is not there.
+@pytest.mark.parametrize(
+    'args, calls',
+    [
+        (('srv', 1, 0, ['/srv/a']), [LIST]),
+        (('home', 3, 0, ['/etc/hostname']), [LIST]),
+        (('home', 3, 0, []), [LIST]),
+        (('root', 0, 1, ['/etc/hostname']), [LIST, NUMBERS]),
+        (('root', 2, 2, ['/etc/hostname']), [LIST, NUMBERS]),
+        (('root', 3, 0, ['/etc/hostname']), [LIST, NUMBERS]),
+    ],
+)
+def test_undo_change_invalid(bus, helper, polkit, snapper, args, calls):
+    polkit.allow('undo-change')
+    assert refusal(bus, 'UndoChange', *args) == 'Invalid'
+    assert polkit.calls() == []
+    assert snapper.calls() == calls
+
+
+def test_undo_change_not_authorized(bus, helper, snapper, runtime):
+    assert refusal(bus, 'UndoChange') == 'NotAuthorized'
+    assert snapper.calls() == [LIST, NUMBERS]
+    assert list(runtime.iterdir()) == []
+
+
+def test_undo_change_failed(bus, helper, polkit, snapper, runtime):
+    snapper.set(CONFIGS, fail={'undochange': "File '/etc/hostname' not found."})
+    polkit.allow('undo-change')
+    with pytest.raises(GLib.Error) as info:
+        call(bus, 'UndoChange')
+    assert remote_error(info.value) == 'Failed'
+    assert info.value.message.endswith(": File '/etc/hostname' not found.")
+    assert list(runtime.iterdir()) == []

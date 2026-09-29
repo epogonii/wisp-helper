@@ -7,6 +7,7 @@ import pytest
 from wisp_helper import errors, validate
 
 CONFIGS = {'root', 'home'}
+NUMBERS = {0, 1, 2, 5}
 
 ACCOUNTS = [('ann', 1000), ('bob smith', 1001), ('carl', 1002), ('carl', 1003), ('ünal', 1004)]
 
@@ -126,3 +127,55 @@ def test_new_subvolume():
     assert validate.new_subvolume('/srv', ['/home', '/srv']) == '/srv'
     with pytest.raises(errors.Invalid):
         validate.new_subvolume('/srv/', ['/home', '/srv'])
+
+
+@pytest.mark.parametrize(
+    'paths, subvolume',
+    [
+        (['/etc/hostname'], '/'),
+        (['/etc', '/etc/a b', '/.hidden', '/usr/lib/modules/x', '/ünal'], '/'),
+        (['/home/ann', '/home/ann/.bashrc'], '/home'),
+        (['/home/ann'], '/home/'),
+    ],
+)
+def test_paths(paths, subvolume):
+    assert validate.paths(paths, subvolume) == paths
+
+
+@pytest.mark.parametrize(
+    'paths, subvolume',
+    [
+        ([], '/'),
+        ([''], '/'),
+        (['/'], '/'),
+        (['etc/hostname'], '/'),
+        (['//etc/hostname'], '/'),
+        (['/etc//hostname'], '/'),
+        (['/etc/./hostname'], '/'),
+        (['/etc/../etc/hostname'], '/'),
+        (['/etc/'], '/'),
+        (['/etc/a\nb'], '/'),
+        (['/etc/a\0b'], '/'),
+        (['/etc/hostname', '/etc/a\n/etc/shadow'], '/'),
+        (['/home'], '/home'),
+        (['/home/'], '/home'),
+        (['/home2/ann'], '/home'),
+        (['/etc/passwd'], '/home'),
+        (['/home/../etc/passwd'], '/home'),
+    ],
+)
+def test_paths_refused(paths, subvolume):
+    with pytest.raises(errors.Invalid):
+        validate.paths(paths, subvolume)
+
+
+@pytest.mark.parametrize('first, last', [(1, 2), (2, 1), (5, 0)])
+def test_snapshots(first, last):
+    assert validate.snapshots(first, last, NUMBERS) == (first, last)
+
+
+# The running system as first, the same twice, a snapshot that is not there.
+@pytest.mark.parametrize('first, last', [(0, 5), (0, 0), (2, 2), (3, 0), (1, 7)])
+def test_snapshots_refused(first, last):
+    with pytest.raises(errors.Invalid):
+        validate.snapshots(first, last, NUMBERS)

@@ -96,7 +96,10 @@ class Call:
         self.uid = polkit.caller_uid(connection, invocation.get_sender())
 
     def __str__(self):
-        args = ', '.join(map(repr, self.args))
+        # UndoChange can bring thousands of paths.
+        args = ', '.join(
+            f'{len(arg)} paths' if isinstance(arg, list) else repr(arg) for arg in self.args
+        )
         return f'{self.method}({args}) from uid {self.uid}'
 
     def done(self, result):
@@ -244,3 +247,10 @@ class Service:
     def DeleteConfig(self, call, config):
         validate.config(config, snapper.configs())
         return lambda: snapper.delete_config(config)
+
+    def UndoChange(self, call, config, first, last, paths):
+        configs = snapper.configs()
+        validate.config(config, configs)
+        validate.paths(paths, configs[config])
+        validate.snapshots(first, last, snapper.numbers(config))
+        return lambda: snapper.undo_change(config, first, last, paths)

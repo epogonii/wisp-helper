@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+import os
 import pwd
 import re
 
@@ -74,3 +75,27 @@ def settings(values):
         if not good:
             raise Invalid(f'{key} cannot be {value!r}')
     return values
+
+
+# undochange reads its list line by line and looks each path up as it is.
+def paths(values, subvolume):
+    if not values:
+        raise Invalid('nothing to undo')
+    prefix = subvolume.rstrip('/') + '/'
+    for path in values:
+        # normpath keeps a leading //.
+        clean = os.path.normpath(path) == path and not path.startswith('//')
+        inside = path.startswith(prefix) and path != prefix
+        if not clean or not inside or '\n' in path or '\0' in path:
+            raise Invalid(f'cannot undo {path!r} in {subvolume}')
+    return values
+
+
+# snapper puts files back as first had them. 0 is the running system.
+def snapshots(first, last, numbers):
+    if first == 0 or first == last:
+        raise Invalid(f'cannot undo {first}..{last}')
+    for number in (first, last):
+        if number not in numbers:
+            raise Invalid(f'no snapshot {number}')
+    return first, last
