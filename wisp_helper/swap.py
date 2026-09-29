@@ -45,6 +45,11 @@ class Refused(Exception):
         self.more = more
 
 
+# btrfs failed with the copy already made.
+class Partial(Failed):
+    pass
+
+
 class Plan(NamedTuple):
     source: str
     subvolume: str
@@ -161,15 +166,14 @@ def plan(number, now, current_kernel):
     return Plan(root.source, subvolume, number, backup, kernel, moved, stand_ins, stamp, info)
 
 
-# btrfs can fail with the copy already made.
 def copy(source, target):
     if os.path.lexists(target):
         raise Failed(f'{target} is there already')
     try:
         run([BTRFS, 'subvolume', 'snapshot', source, target], timeout=None)
-    except Failed:
+    except Failed as error:
         if os.path.lexists(target):
-            run([BTRFS, 'subvolume', 'delete', target], timeout=None)
+            raise Partial(str(error)) from None
         raise
 
 
@@ -281,6 +285,9 @@ def swap(top, plan):
         try:
             do()
         except Exception as error:
+            # What btrfs made before failing is deleted with the rest.
+            if isinstance(error, Partial):
+                done.append((name, undo))
             put_back(f'{name} failed: {error}', done)
         done.append((name, undo))
 

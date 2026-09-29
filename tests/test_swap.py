@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 import datetime
+import os
 
 import pytest
 
@@ -258,23 +259,58 @@ def test_version_key(version, key):
     assert [part for part in swap.version_key(version) if isinstance(part, int)] == key
 
 
-def test_copy_failed(tmp_path, monkeypatch):
+def fake_btrfs(tmp_path, monkeypatch, delete='/bin/rmdir "$3"'):
     btrfs = tmp_path / 'btrfs'
     btrfs.write_text(
         '#!/bin/sh\n'
         'if [ "$2" = snapshot ]; then /bin/mkdir "$4"; echo "ERROR: cannot sync" >&2; exit 1; fi\n'
-        '/bin/rmdir "$3"\n'
+        f'{delete}\n'
     )
     btrfs.chmod(0o755)
     monkeypatch.setattr(swap, 'BTRFS', str(btrfs))
-    with pytest.raises(swap.Failed, match='^ERROR: cannot sync$'):
+
+
+def test_copy_failed(tmp_path, monkeypatch):
+    fake_btrfs(tmp_path, monkeypatch)
+    with pytest.raises(swap.Partial, match='^ERROR: cannot sync$'):
         swap.copy(str(tmp_path / 'snapshot'), str(tmp_path / 'copy'))
-    assert not (tmp_path / 'copy').exists()
 
 
 # Not deleted when it was there before.
 def test_copy_there(tmp_path):
     (tmp_path / 'copy').mkdir()
-    with pytest.raises(swap.Failed, match='is there already$'):
+    with pytest.raises(swap.Failed, match='is there already$') as info:
         swap.copy(str(tmp_path / 'snapshot'), str(tmp_path / 'copy'))
+    assert not isinstance(info.value, swap.Partial)
     assert (tmp_path / 'copy').exists()
+
+
+# The copy btrfs made before failing goes back with the rest, or is named
+# when it cannot.
+@pytest.mark.parametrize(
+    'delete, end, left, snapshots',
+    [
+        ('/bin/rmdir "$3"', 'Everything was put back.', ['root'], ['5']),
+        (
+            'echo "ERROR: busy" >&2; exit 1',
+            'failed too: ERROR: busy. What came before it is still done.',
+            ['root', 'root.20260929-120005.new'],
+            ['11', '5'],
+        ),
+    ],
+)
+def test_swap_copy_failed(tmp_path, monkeypatch, delete, end, left, snapshots):
+    fake_btrfs(tmp_path, monkeypatch, delete)
+    monkeypatch.setattr(swap, 'same', lambda path, running: None)
+    top = tmp_path / 'top'
+    (top / 'root/.snapshots/5/snapshot').mkdir(parents=True)
+    found = swap.Plan('/dev/vda3', 'root', 5, 11, '', ['.snapshots'], [], '20260929-120005', INFO)
+    with pytest.raises(swap.Failed) as info:
+        swap.swap(str(top), found)
+    message = str(info.value)
+    assert message.startswith(
+        'snapshot .snapshots/5/snapshot as root.20260929-120005.new failed: ERROR: cannot sync. '
+    )
+    assert message.endswith(end)
+    assert sorted(os.listdir(top)) == left
+    assert sorted(os.listdir(top / 'root/.snapshots')) == snapshots
