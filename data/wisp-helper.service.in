@@ -3,6 +3,9 @@
 [Unit]
 Description=Wisp helper for snapper
 Documentation=https://github.com/epogonii/wisp-helper
+# At shutdown the helper stops first, so an undochange or rollback still
+# running keeps snapperd and the bus until it is done.
+After=dbus.service snapperd.service
 
 [Service]
 Type=dbus
