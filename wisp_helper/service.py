@@ -4,7 +4,7 @@
 
 import logging
 import platform
-import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from gi.repository import Gio, GLib
 
@@ -99,6 +99,12 @@ class Call:
         args = ', '.join(map(repr, self.args))
         return f'{self.method}({args}) from uid {self.uid}'
 
+    def done(self, result):
+        if isinstance(result, Exception):
+            self.fail(result)
+        else:
+            self.reply(result)
+
     def reply(self, value):
         log.info('%s: ok', self)
         self.invocation.return_value(value)
@@ -115,7 +121,12 @@ class Service:
     def __init__(self, quit):
         self.quit = quit
         self.busy = False
+        self.jobs = 0
         self.timer = 0
+        # Programs run in these threads, the main loop only talks D-Bus.
+        # Reads have their own, so they answer while an action runs.
+        self.worker = ThreadPoolExecutor(max_workers=1)
+        self.readers = ThreadPoolExecutor(max_workers=2)
 
     def register(self, connection, name):
         info = Gio.DBusNodeInfo.new_for_xml(XML)
@@ -130,7 +141,7 @@ class Service:
         self.timer = GLib.timeout_add_seconds(IDLE, self.on_idle)
 
     def on_idle(self):
-        if self.busy:
+        if self.busy or self.jobs:
             return GLib.SOURCE_CONTINUE
         log.info('Nothing to do for %d s, quitting', IDLE)
         self.timer = 0
@@ -144,46 +155,57 @@ class Service:
         self.restart_timer()
         call = Call(connection, invocation)
         handler = getattr(self, method, None)
-        try:
-            if method not in ACTIONS:
-                call.reply((handler or unwritten)(call, *call.args))
-                return
-            if self.busy:
-                raise Busy('another action is running')
+        if method not in ACTIONS:
+            self.later(self.readers, lambda: (handler or unwritten)(call, *call.args), call.done)
+        elif self.busy:
+            call.fail(Busy('another action is running'))
+        else:
+            self.busy = True
             # The handler checks the arguments and returns the work to run after polkit.
-            work = handler(call, *call.args) if handler else unwritten
-        except Exception as error:
-            call.fail(error)
+            self.later(
+                self.worker,
+                lambda: handler(call, *call.args) if handler else unwritten,
+                lambda work: self.authorize(connection, call, work),
+            )
+
+    # Runs job in pool, then hands what it returned or raised to then.
+    def later(self, pool, job, then):
+        def run():
+            try:
+                result = job()
+            except Exception as error:
+                result = error
+            GLib.idle_add(done, result)
+
+        def done(result):
+            self.jobs -= 1
+            then(result)
+            return GLib.SOURCE_REMOVE
+
+        self.jobs += 1
+        pool.submit(run)
+
+    def authorize(self, connection, call, work):
+        if isinstance(work, Exception):
+            self.finish(call, work)
             return
-        self.busy = True
         polkit.authorize(
             connection,
-            invocation,
-            ACTIONS[method],
+            call.invocation,
+            ACTIONS[call.method],
             lambda allowed: self.authorized(call, work, allowed),
         )
 
     def authorized(self, call, work, allowed):
         if allowed:
-            threading.Thread(target=self.run, args=(call, work)).start()
+            self.later(self.worker, work, lambda result: self.finish(call, result))
         else:
             self.finish(call, NotAuthorized('not authorized'))
-
-    def run(self, call, work):
-        try:
-            result = work()
-        except Exception as error:
-            result = error
-        GLib.idle_add(self.finish, call, result)
 
     def finish(self, call, result):
         self.busy = False
         self.restart_timer()
-        if isinstance(result, Exception):
-            call.fail(result)
-        else:
-            call.reply(result)
-        return GLib.SOURCE_REMOVE
+        call.done(result)
 
     def GetInfo(self, call):
         info = {

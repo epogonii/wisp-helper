@@ -8,6 +8,7 @@ calls.json to see what the helper ran.
 
 import json
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(sys.argv[0]).parent
@@ -24,6 +25,7 @@ def main(args):
     with CALLS.open('a') as file:
         print(json.dumps(args), file=file)
     state = json.loads(STATE.read_text())
+    time.sleep(state.get('sleep', 0))
     configs = state['configs']
     jsonout = args[0] == '--jsonout'
     if jsonout:

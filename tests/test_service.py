@@ -26,6 +26,8 @@ USER = pwd.getpwnam('nobody')
 LIST = ['--jsonout', 'list-configs']
 GET = ['--jsonout', '-c', 'root', 'get-config']
 
+CONFIGS = {'root': {'SUBVOLUME': '/', 'ALLOW_USERS': '', 'SYNC_ACL': 'no'}}
+
 # A call for every method that needs polkit.
 ACTIONS = {
     'GrantAccess': ('(s)', ('root',)),
@@ -115,10 +117,10 @@ class Snapper:
         self.path = path / 'snapper'
         self.path.write_text(f'#!{sys.executable}\n' + (ROOT / 'tests/fake_snapper.py').read_text())
         self.path.chmod(0o755)
-        self.set({'root': {'SUBVOLUME': '/', 'ALLOW_USERS': '', 'SYNC_ACL': 'no'}})
+        self.set(CONFIGS)
 
-    def set(self, configs, fail=None):
-        state = {'configs': configs, 'fail': fail or {}}
+    def set(self, configs, fail=None, sleep=0):
+        state = {'configs': configs, 'fail': fail or {}, 'sleep': sleep}
         self.path.with_name('state.json').write_text(json.dumps(state))
 
     def configs(self):
@@ -296,8 +298,7 @@ def test_grant_access_not_authorized(bus, helper, snapper):
 
 
 def test_grant_access_failed(bus, helper, polkit, snapper):
-    root = {'SUBVOLUME': '/', 'ALLOW_USERS': '', 'SYNC_ACL': 'no'}
-    snapper.set({'root': root}, fail={'set-config': 'Setting config failed (io error).'})
+    snapper.set(CONFIGS, fail={'set-config': 'Setting config failed (io error).'})
     polkit.allow('grant-access')
     with pytest.raises(GLib.Error) as info:
         call(bus, 'GrantAccess')
@@ -314,3 +315,30 @@ def test_caller(bus, launch, polkit, snapper):
         call(bus, 'GrantAccess')
         user = pwd.getpwuid(os.getuid()).pw_name
         assert snapper.configs()['root']['ALLOW_USERS'] == user
+
+
+def test_answers_while_snapper_runs(bus, helper, polkit, snapper):
+    snapper.set(CONFIGS, sleep=2)
+    signature, args = ACTIONS['GrantAccess']
+    results = []
+    bus.call(
+        NAME,
+        PATH,
+        NAME,
+        'GrantAccess',
+        GLib.Variant(signature, args),
+        None,
+        Gio.DBusCallFlags.NONE,
+        10000,
+        None,
+        lambda bus, result: results.append(result),
+    )
+    started = time.monotonic()
+    (info,) = request(bus, NAME, PATH, NAME, 'GetInfo')
+    assert info['version'] == VERSION
+    assert time.monotonic() - started < 1
+    assert refusal(bus, 'SetConfig') == 'Busy'
+    while not results:
+        GLib.MainContext.default().iteration(True)
+    with pytest.raises(GLib.Error):
+        bus.call_finish(results[0])
