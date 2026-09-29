@@ -149,7 +149,10 @@ def test_swap(image, kind):
     assert 'rollback backup' in listed
     sh(*snapper, 'delete', '6')
     assert 'rollback backup' not in sh(*snapper, 'list', '--columns', 'number,description')
-    assert sorted(os.listdir(root / '.snapshots')) == ['5']
+    # With UNIQUE_NUMBERS snapper keeps the directory of the highest number,
+    # empty, so that no number comes back.
+    assert sorted(os.listdir(root / '.snapshots')) in (['5'], ['5', '6'])
+    assert not os.path.exists(root / '.snapshots/6') or not os.listdir(root / '.snapshots/6')
 
 
 # A failure halfway puts every name back.
