@@ -60,6 +60,13 @@ def default_kernel():
     return run([GRUBBY, '--default-kernel']).stdout.strip()
 
 
+# Subvolumes right inside the running root, as paths in it.
+def children(subvolume):
+    lines = run([BTRFS, 'subvolume', 'list', '-o', layout.at('/')]).stdout.splitlines()
+    paths = [line.split(' path ', 1)[1] for line in lines if ' path ' in line]
+    return [path.removeprefix(f'{subvolume}/') for path in paths]
+
+
 # 6.10 comes after 6.9.
 def version_key(version):
     return [int(part) if part.isdigit() else part for part in re.split(r'(\d+)', version)]
@@ -70,13 +77,14 @@ def version_key(version):
 def plan(number, now, current_kernel):
     table = layout.mounts()
     root = layout.seen('/', table)
+    subvolume = root.root.strip('/')
     snapshot = f'/.snapshots/{number}/snapshot'
     if layout.inode(snapshot) != layout.SUBVOLUME:
         raise Refused('no-snapshot', f'snapshot {number} is not there')
 
     # The system as it is now is kept as a snapshot, under a number snapper
     # has not used yet.
-    used = [int(name) for name in layout.names('/.snapshots') if name.isdigit()]
+    used = [int(name) for name in layout.names('/.snapshots') if re.fullmatch('[0-9]+', name)]
     backup = max(used, default=0) + 1
 
     # The copy's stand-ins go before the subvolumes move in. An old root kept
@@ -87,6 +95,10 @@ def plan(number, now, current_kernel):
         if layout.inode(f'/{path}') == layout.SUBVOLUME and there in (layout.STAND_IN, 0):
             moved.append(path)
     stand_ins = [path for path in moved if layout.inode(f'{snapshot}/{path}') != 0]
+    # Any other would stay in the backup, with an empty directory for it in the new root.
+    left = sorted(set(children(subvolume)) - set(moved))
+    if left:
+        raise Refused('nested', f'subvolumes in the root would stay behind: {", ".join(left)}')
 
     # A /boot of its own does not go back with the rest. A kernel there whose
     # modules the snapshot lacks would start without them.
@@ -109,7 +121,10 @@ def plan(number, now, current_kernel):
                     'no-grubby', 'without grubby no kernel the snapshot has can be picked'
                 )
             if current not in [f'/boot/vmlinuz-{version}' for version in fit]:
-                kernel = max(fit, key=version_key)
+                # A +debug kernel only for somebody who runs one.
+                variant = current.partition('+')[2]
+                same = [version for version in fit if version.partition('+')[2] == variant]
+                kernel = max(same or fit, key=version_key)
 
     # What snapper writes for the backup its own rollback keeps: cleaned up
     # by number, among the important ones.
@@ -121,8 +136,17 @@ def plan(number, now, current_kernel):
     )
     # Named after the time, so a second go never runs into what the first left.
     stamp = now.strftime('%Y%m%d-%H%M%S')
-    subvolume = root.root.strip('/')
     return Plan(root.source, subvolume, number, backup, kernel, moved, stand_ins, stamp, info)
+
+
+# btrfs can fail with the copy already made.
+def copy(source, target):
+    try:
+        run([BTRFS, 'subvolume', 'snapshot', source, target], timeout=None)
+    except Failed:
+        if os.path.lexists(target):
+            run([BTRFS, 'subvolume', 'delete', target], timeout=None)
+        raise
 
 
 def write(path, text):
@@ -206,9 +230,7 @@ def swap(top, plan):
     steps.append(
         (
             f'snapshot {snapshot} as {fresh}',
-            lambda: run(
-                [BTRFS, 'subvolume', 'snapshot', at(f'{sub}/{snapshot}'), at(fresh)], timeout=None
-            ),
+            lambda: copy(at(f'{sub}/{snapshot}'), at(fresh)),
             lambda: run([BTRFS, 'subvolume', 'delete', at(fresh)], timeout=None),
         )
     )
@@ -240,15 +262,19 @@ def swap(top, plan):
 
 
 def put_back(problem, done):
+    undone = False
     for name, undo in reversed(done):
         if undo is None:
             continue
         log.info('Rollback: undoing %s', name)
         try:
             undo()
+            undone = True
         except Exception as error:
             raise Failed(
                 f'{problem}. Undoing "{name}" failed too: {error}. '
                 'What came before it is still done.'
             ) from None
-    raise Failed(f'{problem}. Everything was put back.')
+    raise Failed(
+        f'{problem}. ' + ('Everything was put back.' if undone else 'Nothing was changed.')
+    )

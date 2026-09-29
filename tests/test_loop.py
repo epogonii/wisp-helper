@@ -218,3 +218,66 @@ def test_swap_other_root(image):
     mount('subvolid=5', check)
     assert sorted(os.listdir(check)) == ['home', 'root']
     assert sorted(os.listdir(check / 'root/.snapshots')) == ['5']
+
+
+# The snapshot lacks the modules of the default kernel, so grubby picks one it has.
+@pytest.mark.parametrize('fails', [False, True])
+def test_swap_kernel(image, monkeypatch, fails):
+    tmp_path, loop, mount, unmount = image
+    build(tmp_path, mount, unmount, 'snapshot')
+    sysroot = tmp_path / 'sysroot'
+    (sysroot / 'boot').mkdir()
+    for version in ('7.2.8', '7.2.9'):
+        (sysroot / f'boot/vmlinuz-{version}').touch()
+    (sysroot / 'usr/lib/modules/7.2.9').mkdir()
+    with open(tmp_path / 'mountinfo', 'a') as file:
+        file.write('2 1 8:1 / /boot rw - ext4 /dev/sdz1 rw\n')
+    grubby = tmp_path / 'grubby'
+    grubby.write_text(
+        f'#!/bin/sh\necho "$@" >> {tmp_path}/grubby.log\n'
+        '[ "$1" = --default-kernel ] && echo /boot/vmlinuz-7.2.9\nexit 0\n'
+    )
+    grubby.chmod(0o755)
+    monkeypatch.setattr(swap, 'GRUBBY', str(grubby))
+    plan = swap.plan(5, NOW, swap.default_kernel)
+    assert plan.kernel == '7.2.8'
+    calls = ['--default-kernel', '--default-kernel', '--set-default /boot/vmlinuz-7.2.8']
+    if fails:
+        rename = os.rename
+
+        def failing(old, new):
+            if new.endswith('var/lib/portables'):
+                raise OSError(5, 'Input/output error')
+            rename(old, new)
+
+        monkeypatch.setattr(os, 'rename', failing)
+        with pytest.raises(swap.Failed, match='Everything was put back.$'):
+            swap.execute(plan)
+        calls.append('--set-default /boot/vmlinuz-7.2.9')
+    else:
+        swap.execute(plan)
+    assert (tmp_path / 'grubby.log').read_text().splitlines() == calls
+
+
+# A timeline snapshot took the number first.
+def test_swap_number_taken(image):
+    tmp_path, loop, mount, unmount = image
+    build(tmp_path, mount, unmount, 'snapshot')
+    plan = swap.plan(5, NOW, lambda: None)
+    (tmp_path / 'sysroot/.snapshots/6').mkdir()
+    with pytest.raises(swap.Failed, match='File exists.*Nothing was changed.$'):
+        swap.execute(plan)
+    setup = tmp_path / 'setup'
+    mount('subvolid=5', setup)
+    assert sorted(os.listdir(setup)) == ['home', 'root']
+
+
+# Docker's would stay in the backup, so nothing is done.
+def test_swap_nested(image):
+    tmp_path, loop, mount, unmount = image
+    build(tmp_path, mount, unmount, 'snapshot')
+    sysroot = tmp_path / 'sysroot'
+    (sysroot / 'var/lib/docker').mkdir()
+    sh('btrfs', '-q', 'subvolume', 'create', str(sysroot / 'var/lib/docker/4f2a'))
+    with pytest.raises(swap.Refused, match=': var/lib/docker/4f2a$'):
+        swap.plan(5, NOW, lambda: None)

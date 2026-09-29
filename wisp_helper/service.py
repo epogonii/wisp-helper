@@ -346,7 +346,11 @@ class Service:
                 plan = swap_plan(number)
                 swap.execute(plan)
                 backup, kernel = plan.backup, plan.kernel
-            layout.mark_pending()
+            # The rollback is done, and for a swap mountinfo tells the rest.
+            try:
+                layout.mark_pending()
+            except OSError as error:
+                log.warning('Cannot mark the rollback as pending: %s', error)
             done = {
                 'mode': GLib.Variant('s', mode),
                 'backup': GLib.Variant('u', backup),

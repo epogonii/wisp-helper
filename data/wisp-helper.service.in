@@ -16,6 +16,10 @@ ProtectKernelTunables=yes
 ProtectControlGroups=yes
 RestrictAddressFamilies=AF_UNIX
 LockPersonality=yes
+# SIGTERM goes to the helper alone, which lets a running snapper or btrfs
+# finish first. undochange over many files takes long.
+KillMode=mixed
+TimeoutStopSec=30min
 # ProtectSystem, ProtectHome, PrivateTmp, ProtectKernelModules (it hides
 # /usr/lib/modules), RestrictSUIDSGID and PrivateDevices break undochange
 # or the swap rollback.

@@ -41,6 +41,14 @@ def system(tmp_path, monkeypatch):
     directories = {'/.snapshots': ['1', '2', '5', '10', 'x'], '/boot': []}
     monkeypatch.setattr(layout, 'inode', lambda path: inodes.get(path, 0))
     monkeypatch.setattr(layout, 'names', lambda path: directories.get(path, []))
+    # Subvolumes in the root are what has inode 256 there.
+    other = []
+    monkeypatch.setattr(
+        swap,
+        'children',
+        lambda subvolume: [path for path in NESTED if inodes.get(f'/{path}') == 256] + other,
+    )
+    inodes['other'] = other
     return inodes, directories
 
 
@@ -71,21 +79,37 @@ def test_plan_backup(system):
     assert (found.moved, found.stand_ins) == (NESTED, [])
 
 
-# Not a subvolume in the root, or a real directory in the snapshot.
-@pytest.mark.parametrize(
-    'path, number', [('/var/lib/machines', 4711), (f'{SNAPSHOT}/var/lib/machines', 4711)]
-)
-def test_plan_not_moved(system, path, number):
+def test_plan_not_a_subvolume(system):
     inodes, _ = system
-    inodes[path] = number
+    inodes['/var/lib/machines'] = 4711
     found = plan()
     assert found.moved == ['.snapshots', 'var/lib/portables']
     assert found.stand_ins == found.moved
 
 
+# A subvolume that cannot move, or one of Docker's, would stay in the backup.
+@pytest.mark.parametrize(
+    'path, left',
+    [
+        (f'{SNAPSHOT}/var/lib/machines', 'var/lib/machines'),
+        (None, 'var/lib/docker/btrfs/subvolumes/4f2a'),
+    ],
+)
+def test_plan_nested(system, path, left):
+    inodes, _ = system
+    if path:
+        inodes[path] = 4711
+    else:
+        inodes['other'].append(left)
+    with pytest.raises(swap.Refused) as info:
+        plan()
+    assert info.value.code == 'nested'
+    assert str(info.value).endswith(f': {left}')
+
+
 def test_plan_first_backup(system):
     _, directories = system
-    directories['/.snapshots'] = ['5']
+    directories['/.snapshots'] = ['5', '\u00b2', '\u0663']
     assert plan().backup == 6
 
 
@@ -118,6 +142,19 @@ def kernels(system, running, snapshot):
         (['7.2.8', '7.2.9'], ['7.2.8'], '/boot/vmlinuz-7.2.8', ''),
         (['7.2.8', '7.2.9'], ['7.2.8'], '/boot/vmlinuz-7.2.9', '7.2.8'),
         (['6.9.1', '6.10.2', '6.11.0'], ['6.9.1', '6.10.2'], '/boot/vmlinuz-6.11.0', '6.10.2'),
+        # The debug kernel only for somebody who runs one.
+        (
+            ['7.2.9', '7.2.9+debug', '7.3.0'],
+            ['7.2.9', '7.2.9+debug'],
+            '/boot/vmlinuz-7.3.0',
+            '7.2.9',
+        ),
+        (
+            ['7.2.9', '7.2.9+debug', '7.3.0+debug'],
+            ['7.2.9', '7.2.9+debug'],
+            '/boot/vmlinuz-7.3.0+debug',
+            '7.2.9+debug',
+        ),
         # No modules in the running system either: not a kernel to count.
         (['7.2.8'], [], None, ''),
     ],
@@ -152,3 +189,17 @@ def test_boot_inside(system, tmp_path):
 )
 def test_version_key(version, key):
     assert [part for part in swap.version_key(version) if isinstance(part, int)] == key
+
+
+def test_copy_failed(tmp_path, monkeypatch):
+    btrfs = tmp_path / 'btrfs'
+    btrfs.write_text(
+        '#!/bin/sh\n'
+        'if [ "$2" = snapshot ]; then /bin/mkdir "$4"; echo "ERROR: cannot sync" >&2; exit 1; fi\n'
+        '/bin/rmdir "$3"\n'
+    )
+    btrfs.chmod(0o755)
+    monkeypatch.setattr(swap, 'BTRFS', str(btrfs))
+    with pytest.raises(swap.Failed, match='^ERROR: cannot sync$'):
+        swap.copy(str(tmp_path / 'snapshot'), str(tmp_path / 'copy'))
+    assert not (tmp_path / 'copy').exists()

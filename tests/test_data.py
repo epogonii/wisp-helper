@@ -70,6 +70,8 @@ def test_unit():
     assert unit['Service']['Type'] == 'dbus'
     assert unit['Service']['BusName'] == NAME
     assert unit['Service']['ExecStart'] == '@libexecdir@/wisp-helper'
+    # Stopping the helper must not kill snapper or btrfs halfway.
+    assert unit['Service']['KillMode'] == 'mixed'
 
 
 def test_meson_version():
