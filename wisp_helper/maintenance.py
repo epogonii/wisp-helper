@@ -25,7 +25,9 @@ def find():
 
 # Only the lines of these keys change, comments and order stay.
 def set_values(path, values):
-    with open(path, encoding='utf-8', errors='surrogateescape') as file:
+    # A link stays a link. newline='' keeps a lone \r, which the shell does not see as a line end.
+    path = os.path.realpath(path)
+    with open(path, encoding='utf-8', errors='surrogateescape', newline='') as file:
         text = file.read()
     for key, value in values.items():
         line = f'{key}="{value}"'
@@ -40,7 +42,7 @@ def replace_like(path, text):
     info = os.stat(path)
     fd, temp = tempfile.mkstemp(dir=os.path.dirname(path), prefix='.wisp-')
     try:
-        with open(fd, 'w', encoding='utf-8', errors='surrogateescape') as file:
+        with open(fd, 'w', encoding='utf-8', errors='surrogateescape', newline='') as file:
             file.write(text)
             file.flush()
             os.fchown(fd, info.st_uid, info.st_gid)

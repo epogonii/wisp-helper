@@ -90,12 +90,31 @@ def test_set_values(file, labels, values, text):
             b'BTRFS_TRIM_PERIOD_OLD="none"\nBTRFS_TRIM_PERIOD="weekly"\n',
         ),
         (b'# \xff\nBTRFS_TRIM_PERIOD="none"\n', b'# \xff\nBTRFS_TRIM_PERIOD="weekly"\n'),
+        # The shell ends a line only at \n.
+        (
+            b'# lone\rBTRFS_TRIM_PERIOD=x\n',
+            b'# lone\rBTRFS_TRIM_PERIOD=x\nBTRFS_TRIM_PERIOD="weekly"\n',
+        ),
+        (
+            b'X="1"\r\nBTRFS_TRIM_PERIOD="none"\r\nY="2"\r\n',
+            b'X="1"\r\nBTRFS_TRIM_PERIOD="weekly"\nY="2"\r\n',
+        ),
     ],
 )
 def test_set_values_bytes(file, labels, before, after):
     file.write_bytes(before)
     maintenance.set_values(str(file), {'BTRFS_TRIM_PERIOD': 'weekly'})
     assert file.read_bytes() == after
+
+
+def test_set_values_link(file, labels, tmp_path):
+    link = tmp_path / 'default' / 'btrfsmaintenance'
+    link.parent.mkdir()
+    link.symlink_to(file)
+    maintenance.set_values(str(link), {'BTRFS_BALANCE_PERIOD': 'none'})
+    assert link.is_symlink()
+    assert file.read_text() == TEXT.replace('"weekly"', '"none"')
+    assert os.listdir(link.parent) == [link.name]
 
 
 def test_replace_like(file, labels):
