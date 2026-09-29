@@ -116,7 +116,11 @@ class Call:
         if not isinstance(error, Error):
             log.error('%s failed', self, exc_info=error)
             error = Failed(str(error))
-        log.info('%s: %s: %s', self, type(error).__name__, error)
+        # UndoChange's errors name paths, and only their number goes in the log.
+        if self.method == 'UndoChange':
+            log.info('%s: %s', self, type(error).__name__)
+        else:
+            log.info('%s: %s: %s', self, type(error).__name__, error)
         self.invocation.return_dbus_error(error.dbus_name(), str(error))
 
 
@@ -251,7 +255,7 @@ class Service:
     def UndoChange(self, call, config, first, last, paths):
         configs = snapper.configs()
         validate.config(config, configs)
-        validate.paths(paths, configs[config])
+        paths = validate.paths(paths, configs[config])
         validate.snapshots(first, last, snapper.numbers(config))
         return lambda: snapper.undo_change(config, first, last, paths)
 

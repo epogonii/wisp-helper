@@ -176,7 +176,23 @@ def test_new_subvolume():
     ],
 )
 def test_paths(paths, subvolume):
-    assert validate.paths(paths, subvolume) == paths
+    assert validate.paths(paths, subvolume) == [path.encode() for path in paths]
+
+
+# As snapperd sends them: \xNN for a byte over 127, \\ for \.
+@pytest.mark.parametrize(
+    'path, found',
+    [
+        ('/etc/\\xc3\\xbcnal', b'/etc/\xc3\xbcnal'),
+        ('/etc/\\xC3\\xBCnal', b'/etc/\xc3\xbcnal'),
+        ('/etc/\\xff', b'/etc/\xff'),
+        ('/etc/a\\\\b', b'/etc/a\\b'),
+        ('/etc/\\\\x41', b'/etc/\\x41'),
+        ('/etc/\\x41', b'/etc/A'),
+    ],
+)
+def test_paths_escaped(path, found):
+    assert validate.paths([path], '/') == [found]
 
 
 @pytest.mark.parametrize(
@@ -199,6 +215,14 @@ def test_paths(paths, subvolume):
         (['/home2/ann'], '/home'),
         (['/etc/passwd'], '/home'),
         (['/home/../etc/passwd'], '/home'),
+        (['/etc/a\\b'], '/'),
+        (['/etc/a\\'], '/'),
+        (['/etc/\\x4'], '/'),
+        (['/etc/\\xzz'], '/'),
+        (['/etc/a\\x0ab'], '/'),
+        (['/etc/a\\x00b'], '/'),
+        (['/etc/\\x2e\\x2e/shadow'], '/'),
+        (['/home/ann\\x2f..\\x2f..\\x2fetc'], '/home'),
     ],
 )
 def test_paths_refused(paths, subvolume):

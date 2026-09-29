@@ -79,13 +79,13 @@ def test_numbers(fake):
 def test_undo_change(fake, tmp_path, runtime):
     # The helper deletes the list once snapper is done, so the fake keeps a copy.
     fake(f'printf "%s\\n" "$@" > "{tmp_path}/args"; /bin/cp -p "$5" "{tmp_path}/list"')
-    snapper.undo_change('home', 5, 0, ['/home/ann/a b', '/home/ann/ünal'])
+    snapper.undo_change('home', 5, 0, [b'/home/ann/a b', '/home/ann/ünal'.encode(), b'/home/\xff'])
     *args, listed, numbers = (tmp_path / 'args').read_text().splitlines()
     assert args == ['-c', 'home', 'undochange', '-i']
     assert Path(listed).parent == runtime
     assert numbers == '5..0'
     copy = tmp_path / 'list'
-    assert copy.read_text(encoding='utf-8') == '/home/ann/a b\n/home/ann/ünal\n'
+    assert copy.read_bytes() == '/home/ann/a b\n/home/ann/ünal\n'.encode() + b'/home/\xff\n'
     assert copy.stat().st_mode & 0o777 == 0o600
     assert list(runtime.iterdir()) == []
 
@@ -105,7 +105,7 @@ def test_undo_change(fake, tmp_path, runtime):
 def test_undo_change_failed(fake, runtime, script, message):
     fake(script)
     with pytest.raises(errors.Failed) as info:
-        snapper.undo_change('root', 5, 0, ['/etc/a', '/etc/b'])
+        snapper.undo_change('root', 5, 0, [b'/etc/a', b'/etc/b'])
     assert str(info.value) == message
     assert list(runtime.iterdir()) == []
 
@@ -114,6 +114,19 @@ def test_failed(fake):
     fake('echo noise; echo "Unknown config." >&2; exit 1')
     with pytest.raises(errors.Failed, match=r'^Unknown config\.$'):
         snapper.get_config('srv')
+
+
+# D-Bus takes the message only as UTF-8.
+def test_failed_not_utf8(fake):
+    fake("printf 'File \\047/etc/\\377\\047 not found.\\n' >&2; exit 1")
+    with pytest.raises(errors.Failed) as info:
+        snapper.get_config('root')
+    assert str(info.value) == "File '/etc/\ufffd' not found."
+
+
+def test_output_not_utf8(fake):
+    fake('printf \'{"root": [{"number": 0, "description": "\\377"}]}\'')
+    assert snapper.numbers('root') == {0}
 
 
 def test_failed_quietly(fake):

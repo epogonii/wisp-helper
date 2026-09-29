@@ -15,14 +15,29 @@ SNAPPER = shutil.which('snapper', path=ENV['PATH'])
 RUNTIME_DIR = '/run/wisp-helper'
 
 
+# A path or a description in the output need not be UTF-8.
 def run(argv, timeout=600):
     try:
-        done = subprocess.run(argv, env=ENV, capture_output=True, text=True, timeout=timeout)
+        done = subprocess.run(
+            argv,
+            env=ENV,
+            capture_output=True,
+            text=True,
+            errors='surrogateescape',
+            timeout=timeout,
+        )
     except subprocess.TimeoutExpired:
         raise Failed(f'{argv[0]} did not finish in {timeout} s') from None
     if done.returncode != 0:
-        raise Failed(done.stderr.strip()[-2000:] or f'{argv[0]} exited with {done.returncode}')
+        raise Failed(
+            printable(done.stderr.strip()[-2000:]) or f'{argv[0]} exited with {done.returncode}'
+        )
     return done
+
+
+# D-Bus takes only UTF-8.
+def printable(text):
+    return text.encode('utf-8', 'surrogateescape').decode('utf-8', 'replace')
 
 
 def snapper(*args, timeout=600):
@@ -65,8 +80,8 @@ def numbers(config):
 
 
 def undo_change(config, first, last, paths):
-    with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=RUNTIME_DIR) as file:
-        file.write(''.join(f'{path}\n' for path in paths))
+    with tempfile.NamedTemporaryFile(dir=RUNTIME_DIR) as file:
+        file.write(b''.join(path + b'\n' for path in paths))
         file.flush()
         # Without -i snapper would undo every change. There is no timeout:
         # killed halfway, it would leave the restore half done.
@@ -75,7 +90,7 @@ def undo_change(config, first, last, paths):
     # A file snapper could not put back does not change its exit code.
     failed = [line for line in done.stderr.splitlines() if line.startswith('failed to ')]
     if failed:
-        raise Failed('\n'.join(failed)[-2000:])
+        raise Failed(printable('\n'.join(failed)[-2000:]))
 
 
 # What to set so that user may use the config. Empty if it may already.

@@ -497,13 +497,15 @@ def test_delete_config_unknown_config(bus, helper, polkit, snapper):
 
 def test_undo_change(bus, helper, polkit, snapper, runtime):
     polkit.allow('undo-change')
-    call(bus, 'UndoChange', 'home', 3, 0, ['/home/nobody/a b', '/home/nobody/ünal'])
+    paths = ['/home/nobody/a b', '/home/nobody/ünal', '/home/nobody/\\xc3\\xa4']
+    call(bus, 'UndoChange', 'home', 3, 0, paths)
     *reads, undo = snapper.calls()
     assert reads == [LIST, ['--jsonout', '-c', 'home', 'list', '--columns', 'number']]
     assert undo[:4] == ['-c', 'home', 'undochange', '-i']
     assert Path(undo[4]).parent == runtime
     assert undo[5:] == ['3..0']
-    assert snapper.undone() == [['3..0', '0o600', '/home/nobody/a b\n/home/nobody/ünal\n']]
+    listed = '/home/nobody/a b\n/home/nobody/ünal\n/home/nobody/ä\n'
+    assert snapper.undone() == [['3..0', '0o600', listed]]
     assert list(runtime.iterdir()) == []
 
 
@@ -515,6 +517,8 @@ def test_undo_change(bus, helper, polkit, snapper, runtime):
         (('srv', 1, 0, ['/srv/a']), [LIST]),
         (('home', 3, 0, ['/etc/hostname']), [LIST]),
         (('home', 3, 0, []), [LIST]),
+        (('home', 3, 0, ['/home/nobody/a\\b']), [LIST]),
+        (('home', 3, 0, ['/home/nobody/\\x0a/etc/shadow']), [LIST]),
         (('root', 0, 1, ['/etc/hostname']), [LIST, NUMBERS]),
         (('root', 2, 2, ['/etc/hostname']), [LIST, NUMBERS]),
         (('root', 3, 0, ['/etc/hostname']), [LIST, NUMBERS]),

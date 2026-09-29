@@ -92,18 +92,34 @@ def periods(values):
     return values
 
 
-# undochange reads its list line by line and looks each path up as it is.
+# snapperd sends a byte over 127 as \xNN and \ as \\. Plain text is taken as well.
+ESCAPED = re.compile(rb'(?:[^\\]|\\\\|\\x[0-9A-Fa-f]{2})*')
+
+
+def unescape(path):
+    raw = path.encode('utf-8')
+    if not ESCAPED.fullmatch(raw):
+        raise Invalid(f'cannot read {path!r}')
+    return re.sub(
+        rb'\\(\\|x(..))', lambda match: bytes.fromhex(match[2].decode()) if match[2] else b'\\', raw
+    )
+
+
+# undochange reads its list line by line, as bytes, and looks each path up as it is.
 def paths(values, subvolume):
     if not values:
         raise Invalid('nothing to undo')
     prefix = subvolume.rstrip('/') + '/'
-    for path in values:
+    found = []
+    for value in values:
+        path = os.fsdecode(unescape(value))
         # normpath keeps a leading //.
         clean = os.path.normpath(path) == path and not path.startswith('//')
         inside = path.startswith(prefix) and path != prefix
         if not clean or not inside or '\n' in path or '\0' in path:
-            raise Invalid(f'cannot undo {path!r} in {subvolume}')
-    return values
+            raise Invalid(f'cannot undo {value!r} in {subvolume}')
+        found.append(os.fsencode(path))
+    return found
 
 
 # snapper puts files back as first had them. 0 is the running system.
