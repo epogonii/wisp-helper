@@ -8,7 +8,7 @@ import threading
 
 from gi.repository import Gio, GLib
 
-from wisp_helper import API_VERSION, PATH, VERSION, maintenance, polkit
+from wisp_helper import API_VERSION, PATH, VERSION, maintenance, polkit, snapper, validate
 from wisp_helper.errors import Busy, Error, Failed, NotAuthorized, Unsupported
 
 log = logging.getLogger(__name__)
@@ -92,14 +92,22 @@ class Call:
     def __init__(self, connection, invocation):
         self.invocation = invocation
         self.method = invocation.get_method_name()
+        self.args = invocation.get_parameters().unpack()
         self.uid = polkit.caller_uid(connection, invocation.get_sender())
 
+    def __str__(self):
+        args = ', '.join(map(repr, self.args))
+        return f'{self.method}({args}) from uid {self.uid}'
+
     def reply(self, value):
-        log.info('%s from uid %d: ok', self.method, self.uid)
+        log.info('%s: ok', self)
         self.invocation.return_value(value)
 
     def fail(self, error):
-        log.info('%s from uid %d: %s: %s', self.method, self.uid, type(error).__name__, error)
+        if not isinstance(error, Error):
+            log.error('%s failed', self, exc_info=error)
+            error = Failed(str(error))
+        log.info('%s: %s: %s', self, type(error).__name__, error)
         self.invocation.return_dbus_error(error.dbus_name(), str(error))
 
 
@@ -136,19 +144,15 @@ class Service:
         self.restart_timer()
         call = Call(connection, invocation)
         handler = getattr(self, method, None)
-        args = params.unpack()
-        if method not in ACTIONS:
-            try:
-                call.reply((handler or unwritten)(call, *args))
-            except Error as error:
-                call.fail(error)
-            return
         try:
+            if method not in ACTIONS:
+                call.reply((handler or unwritten)(call, *call.args))
+                return
             if self.busy:
                 raise Busy('another action is running')
             # The handler checks the arguments and returns the work to run after polkit.
-            work = handler(call, *args) if handler else unwritten
-        except Error as error:
+            work = handler(call, *call.args) if handler else unwritten
+        except Exception as error:
             call.fail(error)
             return
         self.busy = True
@@ -168,17 +172,14 @@ class Service:
     def run(self, call, work):
         try:
             result = work()
-        except Error as error:
-            result = error
         except Exception as error:
-            log.exception('%s failed', call.method)
-            result = Failed(str(error))
+            result = error
         GLib.idle_add(self.finish, call, result)
 
     def finish(self, call, result):
         self.busy = False
         self.restart_timer()
-        if isinstance(result, Error):
+        if isinstance(result, Exception):
             call.fail(result)
         else:
             call.reply(result)
@@ -191,3 +192,14 @@ class Service:
             'maintenance': GLib.Variant('b', maintenance.find() is not None),
         }
         return GLib.Variant('(a{sv})', (info,))
+
+    def GrantAccess(self, call, config):
+        user = validate.user(call.uid)
+        validate.config(config, snapper.configs())
+
+        def work():
+            values = snapper.allow_user(snapper.get_config(config), user)
+            if values:
+                snapper.set_config(config, values)
+
+        return work

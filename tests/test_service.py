@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+import json
 import os
+import pwd
 import subprocess
 import sys
 import time
@@ -18,6 +20,12 @@ ROOT = Path(__file__).resolve().parent.parent
 POLKIT = 'org.freedesktop.PolicyKit1'
 AUTHORITY = '/org/freedesktop/PolicyKit1/Authority'
 
+# Who the helper thinks is calling, in all tests but one.
+USER = pwd.getpwnam('nobody')
+
+LIST = ['--jsonout', 'list-configs']
+GET = ['--jsonout', '-c', 'root', 'get-config']
+
 # A call for every method that needs polkit.
 ACTIONS = {
     'GrantAccess': ('(s)', ('root',)),
@@ -29,8 +37,6 @@ ACTIONS = {
     'SetMaintenance': ('(a{ss})', ({'BTRFS_SCRUB_PERIOD': 'monthly'},)),
 }
 
-SHORT_IDLE = 'from wisp_helper import __main__, service; service.IDLE = 2; __main__.main()'
-
 
 def request(bus, name, path, interface, method, args=None, reply=None, flags=0):
     reply = GLib.VariantType(reply) if reply else None
@@ -41,11 +47,17 @@ def remote_error(error):
     return Gio.DBusError.get_remote_error(error).removeprefix(f'{NAME}.Error.')
 
 
-def refusal(bus, method, interactive=False):
-    signature, args = ACTIONS[method]
+def call(bus, method, *args, interactive=False):
+    signature, default = ACTIONS[method]
     flags = Gio.DBusCallFlags.ALLOW_INTERACTIVE_AUTHORIZATION if interactive else 0
+    return request(
+        bus, NAME, PATH, NAME, method, GLib.Variant(signature, args or default), flags=flags
+    )
+
+
+def refusal(bus, method, *args, interactive=False):
     with pytest.raises(GLib.Error) as info:
-        request(bus, NAME, PATH, NAME, method, GLib.Variant(signature, args), flags=flags)
+        call(bus, method, *args, interactive=interactive)
     return remote_error(info.value)
 
 
@@ -98,6 +110,26 @@ class Polkit:
         return [args for _, args in calls]
 
 
+class Snapper:
+    def __init__(self, path):
+        self.path = path / 'snapper'
+        self.path.write_text(f'#!{sys.executable}\n' + (ROOT / 'tests/fake_snapper.py').read_text())
+        self.path.chmod(0o755)
+        self.set({'root': {'SUBVOLUME': '/', 'ALLOW_USERS': '', 'SYNC_ACL': 'no'}})
+
+    def set(self, configs, fail=None):
+        state = {'configs': configs, 'fail': fail or {}}
+        self.path.with_name('state.json').write_text(json.dumps(state))
+
+    def configs(self):
+        return json.loads(self.path.with_name('state.json').read_text())['configs']
+
+    def calls(self):
+        path = self.path.with_name('calls.json')
+        lines = path.read_text().splitlines() if path.exists() else []
+        return [json.loads(line) for line in lines]
+
+
 @pytest.fixture(scope='module')
 def address():
     daemon = subprocess.Popen(
@@ -133,11 +165,37 @@ def polkit(address, bus):
 
 
 @pytest.fixture
-def helper(address, bus, polkit):
-    process = spawn(address, '-m', 'wisp_helper')
-    wait_for(bus, NAME)
-    yield process
-    stop(process, bus, NAME)
+def snapper(tmp_path):
+    return Snapper(tmp_path)
+
+
+@pytest.fixture
+def launch(address, bus, polkit, snapper):
+    processes = []
+
+    def launch(uid=USER.pw_uid, idle=None):
+        code = [
+            'from wisp_helper import __main__, polkit, service, snapper',
+            f'snapper.SNAPPER = {str(snapper.path)!r}',
+        ]
+        if uid is not None:
+            code.append(f'polkit.caller_uid = lambda bus, sender: {uid}')
+        if idle:
+            code.append(f'service.IDLE = {idle}')
+        code.append('__main__.main()')
+        process = spawn(address, '-c', '\n'.join(code))
+        processes.append(process)
+        wait_for(bus, NAME)
+        return process
+
+    yield launch
+    for process in processes:
+        stop(process, bus, NAME)
+
+
+@pytest.fixture
+def helper(launch):
+    return launch()
 
 
 def test_version(bus, helper):
@@ -160,9 +218,9 @@ def test_not_authorized(bus, helper, method):
 
 
 def test_authorized(bus, helper, polkit):
-    polkit.allow('grant-access')
-    assert refusal(bus, 'GrantAccess') == 'Unsupported'
-    assert refusal(bus, 'SetConfig') == 'NotAuthorized'
+    polkit.allow('set-config')
+    assert refusal(bus, 'SetConfig') == 'Unsupported'
+    assert refusal(bus, 'DeleteConfig') == 'NotAuthorized'
 
 
 def test_polkit_request(bus, helper, polkit):
@@ -199,15 +257,60 @@ def test_busy(bus, helper, polkit):
     assert remote_error(info.value) == 'NotAuthorized'
 
 
-def test_idle_exit(address, bus, polkit):
-    process = spawn(address, '-c', SHORT_IDLE)
-    wait_for(bus, NAME)
+def test_idle_exit(launch):
+    process = launch(idle=2)
     assert process.wait(timeout=10) == 0
 
 
-def test_no_exit_during_polkit_check(address, bus, polkit):
+def test_no_exit_during_polkit_check(bus, launch, polkit):
     polkit.allow(delay=3)
-    process = spawn(address, '-c', SHORT_IDLE)
-    wait_for(bus, NAME)
+    process = launch(idle=2)
     assert refusal(bus, 'GrantAccess') == 'NotAuthorized'
     assert process.wait(timeout=10) == 0
+
+
+def test_grant_access(bus, helper, polkit, snapper):
+    polkit.allow('grant-access')
+    assert call(bus, 'GrantAccess') == ()
+    set_config = ['-c', 'root', 'set-config', 'ALLOW_USERS=nobody', 'SYNC_ACL=yes']
+    assert snapper.calls() == [LIST, GET, set_config]
+    assert snapper.configs()['root']['ALLOW_USERS'] == 'nobody'
+
+
+def test_grant_access_again(bus, helper, polkit, snapper):
+    snapper.set({'root': {'SUBVOLUME': '/', 'ALLOW_USERS': 'nobody', 'SYNC_ACL': 'yes'}})
+    polkit.allow('grant-access')
+    call(bus, 'GrantAccess')
+    assert snapper.calls() == [LIST, GET]
+
+
+def test_grant_access_unknown_config(bus, helper, polkit, snapper):
+    assert refusal(bus, 'GrantAccess', 'srv') == 'Invalid'
+    assert polkit.calls() == []
+    assert snapper.calls() == [LIST]
+
+
+def test_grant_access_not_authorized(bus, helper, snapper):
+    assert refusal(bus, 'GrantAccess') == 'NotAuthorized'
+    assert snapper.calls() == [LIST]
+
+
+def test_grant_access_failed(bus, helper, polkit, snapper):
+    root = {'SUBVOLUME': '/', 'ALLOW_USERS': '', 'SYNC_ACL': 'no'}
+    snapper.set({'root': root}, fail={'set-config': 'Setting config failed (io error).'})
+    polkit.allow('grant-access')
+    with pytest.raises(GLib.Error) as info:
+        call(bus, 'GrantAccess')
+    assert remote_error(info.value) == 'Failed'
+    assert info.value.message.endswith(': Setting config failed (io error).')
+
+
+def test_caller(bus, launch, polkit, snapper):
+    launch(uid=None)
+    polkit.allow('grant-access')
+    if os.getuid() == 0:
+        assert refusal(bus, 'GrantAccess') == 'Invalid'
+    else:
+        call(bus, 'GrantAccess')
+        user = pwd.getpwuid(os.getuid()).pw_name
+        assert snapper.configs()['root']['ALLOW_USERS'] == user
