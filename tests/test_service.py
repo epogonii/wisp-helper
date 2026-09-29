@@ -686,6 +686,7 @@ def test_plan_rollback(bus, helper, polkit, snapper):
         'kernel': '',
         'refused': '',
         'nested': [],
+        'nested_more': 0,
     }
     assert snapper.calls() == [LIST, DEFAULT, NUMBERS]
     assert polkit.calls() == []
@@ -698,6 +699,7 @@ def test_plan_rollback_no_snapshot(bus, helper):
         'kernel': '',
         'refused': 'no-snapshot',
         'nested': [],
+        'nested_more': 0,
     }
 
 
@@ -710,13 +712,17 @@ def test_plan_rollback_native(bus, helper, snapper, tmp_path):
         'kernel': '',
         'refused': '',
         'nested': [],
+        'nested_more': 0,
     }
 
 
+# A name that is not UTF-8 is still an answer.
 def test_plan_rollback_nested(bus, launch):
-    launch(extra=['swap.children = lambda subvolume: [".snapshots", "var/lib/docker/x"]'])
+    paths = ['.snapshots', *(f'var/tmp/{n}/\udcff' for n in range(7))]
+    launch(extra=[f'swap.children = lambda subvolume: {paths!r}'])
     found = plan_rollback(bus)
-    assert (found['refused'], found['nested']) == ('nested', ['var/lib/docker/x'])
+    names = [f'var/tmp/{n}/\ufffd' for n in range(5)]
+    assert (found['refused'], found['nested'], found['nested_more']) == ('nested', names, 2)
 
 
 # After a swap snapper cannot open /.snapshots until the restart.

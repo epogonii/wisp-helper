@@ -10,6 +10,7 @@ snapshots move across to it, and the system as it was becomes one of them.
 Ported from Wisp's lib/rollback.js at 31d86da.
 """
 
+import collections
 import datetime
 import logging
 import os
@@ -20,7 +21,7 @@ from typing import NamedTuple
 
 from wisp_helper import layout
 from wisp_helper.errors import Failed
-from wisp_helper.snapper import ENV, run
+from wisp_helper.snapper import ENV, printable, run
 
 log = logging.getLogger(__name__)
 
@@ -37,10 +38,11 @@ NESTED = ['var/lib/machines', 'var/lib/portables']
 
 
 class Refused(Exception):
-    def __init__(self, code, message, names=()):
+    def __init__(self, code, message, names=(), more=0):
         super().__init__(message)
         self.code = code
         self.names = list(names)
+        self.more = more
 
 
 class Plan(NamedTuple):
@@ -68,22 +70,17 @@ def children(subvolume):
     return [path.removeprefix(f'{subvolume}/') for path in paths]
 
 
-# Docker keeps a subvolume for each layer, so paths deep down are cut back to
-# the directory above them until few are left.
+# Docker keeps a subvolume for each layer, so a directory with more of them
+# than are listed shows as one.
 def short(paths, most=5):
-    paths = sorted(set(paths))
-    while len(paths) > most:
-        depth = [path.removesuffix('/*').count('/') for path in paths]
-        deepest = max(depth)
-        if deepest == 0:
-            break
-        paths = sorted(
-            {
-                path.removesuffix('/*').rsplit('/', 1)[0] + '/*' if level == deepest else path
-                for path, level in zip(paths, depth, strict=True)
-            }
-        )
-    return paths[:most], max(len(paths) - most, 0)
+    paths = set(paths)
+    many = collections.Counter(os.path.dirname(path) for path in paths)
+    listed = set()
+    for path in paths:
+        parent = os.path.dirname(path)
+        listed.add(f'{parent}/*' if parent and many[parent] > most else path)
+    listed = sorted(listed)
+    return listed[:most], max(len(listed) - most, 0)
 
 
 # 6.10 comes after 6.9.
@@ -120,8 +117,10 @@ def plan(number, now, current_kernel):
     left = sorted(set(children(subvolume)) - set(moved))
     if left:
         names, more = short(left)
+        # Anybody can make a subvolume in /var/tmp, with any name.
+        names = [printable(name) for name in names]
         listed = ', '.join(names) + (f' and {more} more' if more else '')
-        raise Refused('nested', f'subvolumes in the root would stay behind: {listed}', names)
+        raise Refused('nested', f'subvolumes in the root would stay behind: {listed}', names, more)
 
     # A /boot of its own does not go back with the rest. A kernel there whose
     # modules the snapshot lacks would start without them.

@@ -119,18 +119,40 @@ def test_plan_docker(system):
     assert str(info.value).endswith(': srv/vm, var/lib/docker/btrfs/subvolumes/*')
 
 
+def test_plan_nested_more(system):
+    inodes, _ = system
+    inodes['other'].extend(f'srv{n}' for n in range(7))
+    with pytest.raises(swap.Refused) as info:
+        plan()
+    assert (info.value.names, info.value.more) == ([f'srv{n}' for n in range(5)], 2)
+    assert str(info.value).endswith(': srv0, srv1, srv2, srv3, srv4 and 2 more')
+
+
 @pytest.mark.parametrize(
     'paths, found',
     [
         (['a', 'b'], (['a', 'b'], 0)),
         ([f'x{n}' for n in range(7)], ([f'x{n}' for n in range(5)], 2)),
-        (['a/b/1', 'a/b/2', 'a/c', 'd', 'e', 'f'], (['a/b/*', 'a/c', 'd', 'e', 'f'], 0)),
-        (['a/b/1', 'a/b/2', 'a/c', 'd', 'e', 'f', 'g'], (['a/*', 'd', 'e', 'f', 'g'], 0)),
-        (['a/b/c/1', 'a/b/c/2', *'defgh'], (['a/*', 'd', 'e', 'f', 'g'], 1)),
+        ([*'pqrst', 'a/b/c/d/1'], (['a/b/c/d/1', 'p', 'q', 'r', 's'], 1)),
+        (
+            ['var/log', 'var/cache', 'var/tmp', 'var/spool', 'var/crash', 'opt'],
+            (['opt', 'var/cache', 'var/crash', 'var/log', 'var/spool'], 1),
+        ),
+        ([*(f'a/b/{n}' for n in range(6)), 'c'], (['a/b/*', 'c'], 0)),
     ],
 )
 def test_short(paths, found):
     assert swap.short(paths) == found
+
+
+# btrfs prints the name as it is, and D-Bus takes only UTF-8.
+def test_plan_nested_not_utf8(system):
+    inodes, _ = system
+    inodes['other'].append('var/tmp/a\udcff')
+    with pytest.raises(swap.Refused) as info:
+        plan()
+    assert info.value.names == ['var/tmp/a\ufffd']
+    assert str(info.value).endswith(': var/tmp/a\ufffd')
 
 
 def test_plan_no_btrfs(system, monkeypatch):
