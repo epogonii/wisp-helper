@@ -85,7 +85,7 @@ OPENSUSE_FSTAB = (
     'UUID=77aa / btrfs defaults 0 0\nUUID=77aa /.snapshots btrfs subvol=/@/.snapshots 0 0\n'
 )
 CONFIGS = {'root': '/', 'home': '/home'}
-DEFAULT = {'number': 1, 'default': True, 'read-only': False, 'pending': False}
+DEFAULT = {'number': 1, 'default': True, 'read-only': False, 'running': 1, 'pending': False}
 
 # After a swap: the root the machine runs from was renamed into the new one's .snapshots.
 SWAPPED = FEDORA.replace(b'/root / rw', b'/root/.snapshots/26/snapshot / rw', 1).replace(
@@ -187,6 +187,24 @@ def test_native_pending(system):
     assert not layout.pending()
     system()
     assert rollback(row={**DEFAULT, 'pending': True}) == ('swap', '')
+
+
+# A root like @ is no snapshot. Named on the command line, it is what starts
+# again, whatever the default.
+def test_root_named(system):
+    at = OPENSUSE.replace(b'/@/.snapshots/1/snapshot / ', b'/@ / ', 1).replace(
+        b'subvol=/@/.snapshots/1/snapshot\n', b'subvol=/@\n', 1
+    )
+    row = {**DEFAULT, 'running': None, 'pending': True}
+    system(at, 'root=UUID=77aa', OPENSUSE_FSTAB)
+    assert rollback(row=row) == ('none', 'pending')
+    system(at, 'root=UUID=77aa rootflags=subvol=@', OPENSUSE_FSTAB)
+    assert rollback(row=row) == ('none', 'rootflags')
+    assert not layout.pending()
+    system(at, 'root=UUID=77aa rootflags=subvol=@', OPENSUSE_FSTAB.splitlines(True)[1])
+    assert rollback(row=row) == ('none', 'rootflags')
+    system(table='UUID=1b2c / btrfs defaults 0 0\n')
+    assert rollback(row=row) == ('swap', '')
 
 
 # A snapshot once made default, and fstab asking for the root by name anyway.

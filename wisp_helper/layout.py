@@ -129,6 +129,10 @@ def asked(flags):
     return [flag[7:].strip('/') for flag in flags if flag.startswith('subvol=')]
 
 
+def named(options):
+    return any(option.startswith(('subvol=', 'subvolid=')) for option in options)
+
+
 # A swap renames the root the machine runs from, and mountinfo follows the
 # rename. So a root that is no longer where the kernel was asked to find it
 # has been swapped away since boot.
@@ -155,20 +159,26 @@ def rollback(configs, default):
     fstab = fstab_options()
 
     # snapper rolls back by pointing btrfs at another default subvolume, which
-    # fstab overrules when it names the root.
+    # fstab overrules when it names the root. So does the kernel command line,
+    # unless the root it names is a snapshot, as from the boot menu.
     row = default(config)
+    pinned = ''
     if row is not None:
         if row['read-only']:
             return 'none', 'transactional'
-        if not any(option.startswith(('subvol=', 'subvolid=')) for option in fstab):
+        if named(fstab):
+            pinned = 'fstab'
+        elif row['running'] is None and named(rootflags()):
+            pinned = 'rootflags'
+        elif row['pending']:
             # snapper rollback from a terminal leaves no mark.
-            if row['pending']:
-                return 'none', 'pending'
+            return 'none', 'pending'
+        else:
             return 'native', ''
     why = no_swap(root, table, fstab)
     if not why:
         return 'swap', ''
-    return 'none', 'fstab' if row is not None else why
+    return 'none', pinned or why
 
 
 # A swap renames subvolumes, which does nothing to a root asked for by id.

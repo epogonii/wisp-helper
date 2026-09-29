@@ -884,9 +884,14 @@ def test_info_pending_native(bus, helper, snapper, tmp_path):
     snapper.set(CONFIGS, default={'root': [2, False]}, active={'root': [1, True]})
     assert info(bus)['pending'] is False
     assert rollback(bus) == ('native', '')
-    # A root like @ is no snapshot, so none is running.
+    # A root like @ is no snapshot, so none is running. Named on the command
+    # line, it starts again whatever the default.
     snapper.set(CONFIGS, default={'root': [2, False]}, active={'root': [None, False]})
+    (tmp_path / 'cmdline').write_text('root=UUID=1b2c ro\n')
     assert info(bus)['pending'] is True
+    (tmp_path / 'cmdline').write_text(CMDLINE)
+    assert info(bus)['pending'] is False
+    assert rollback(bus) == ('swap', '')
 
 
 # The config of / is no reason to refuse one of another.

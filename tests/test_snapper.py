@@ -168,7 +168,7 @@ def test_default_snapshot(fake, active, read_only, pending):
         for number in (0, 3, 4, 5)
     ]
     fake(f"echo '{json.dumps({'root': rows})}'")
-    assert snapper.default_snapshot('root') == {**rows[3], 'pending': pending}
+    assert snapper.default_snapshot('root') == {**rows[3], 'running': active, 'pending': pending}
 
 
 def test_no_default_snapshot(fake):
