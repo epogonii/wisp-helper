@@ -85,6 +85,18 @@ def default_snapshot(config):
     return next((row for row in rows if row['default'] and row['number'] != 0), None)
 
 
+# snapper keeps the running system as "rollback backup of #N" and makes a
+# writable copy of the snapshot the default subvolume.
+def rollback(config, number):
+    before = numbers(config)
+    snapper('-c', config, 'rollback', str(number), timeout=None)
+    rows = read('-c', config, 'list', '--columns', 'number,description')[config]
+    for row in rows:
+        if row['number'] not in before and row['description'].startswith('rollback backup'):
+            return row['number']
+    return 0
+
+
 def undo_change(config, first, last, paths):
     with tempfile.NamedTemporaryFile(dir=RUNTIME_DIR) as file:
         file.write(b''.join(path + b'\n' for path in paths))

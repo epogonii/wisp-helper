@@ -150,3 +150,26 @@ def test_missing(monkeypatch):
     monkeypatch.setattr(snapper, 'SNAPPER', None)
     with pytest.raises(errors.Unsupported):
         snapper.configs()
+
+
+# A timeline snapshot may slip in next to the two rollback makes.
+def test_rollback(fake, tmp_path):
+    before = {'root': [{'number': 0}, {'number': 5}]}
+    after = {
+        'root': [
+            {'number': 0, 'description': ''},
+            {'number': 5, 'description': 'dnf'},
+            {'number': 6, 'description': 'timeline'},
+            {'number': 7, 'description': 'rollback backup of #1'},
+            {'number': 8, 'description': 'writable copy of #5'},
+        ]
+    }
+    fake(
+        f'case "$*" in\n'
+        f"*'list --columns number') echo '{json.dumps(before)}' ;;\n"
+        f"*'list --columns number,description') echo '{json.dumps(after)}' ;;\n"
+        f'*) echo "$@" >> "{tmp_path}/args" ;;\n'
+        'esac'
+    )
+    assert snapper.rollback('root', 5) == 7
+    assert (tmp_path / 'args').read_text() == '-c root rollback 5\n'

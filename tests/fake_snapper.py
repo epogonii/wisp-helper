@@ -57,15 +57,28 @@ def main(args):
         # A new config has only the running system, 0.
         numbers = state['snapshots'].get(config, [0])
         default, read_only = state.get('default', {}).get(config, [None, False])
+        descriptions = state.get('descriptions', {})
         rows = [
             {
                 'number': number,
                 'default': number == default,
                 'read-only': number == default and read_only,
+                'description': descriptions.get(str(number), ''),
             }
             for number in numbers
         ]
         print(json.dumps({config: rows}))
+    elif command == 'rollback':
+        # As snapper does: a read-only backup, and a writable copy made default.
+        (number,) = rest
+        numbers = state['snapshots'][config]
+        backup, copy = max(numbers) + 1, max(numbers) + 2
+        numbers += [backup, copy]
+        state['descriptions'] = {
+            str(backup): 'rollback backup of #1',
+            str(copy): f'writable copy of #{number}',
+        }
+        state['default'] = {config: [copy, False]}
     elif command == 'undochange' and rest[0] == '-i':
         # The helper deletes the list afterwards, so what it held is kept here.
         path = Path(rest[1])
@@ -74,7 +87,7 @@ def main(args):
     else:
         fail(f'unexpected call: {args}')
     # A read may run next to a change, so only changes write.
-    if command in ('create-config', 'set-config', 'delete-config', 'undochange'):
+    if command in ('create-config', 'set-config', 'delete-config', 'undochange', 'rollback'):
         STATE.write_text(json.dumps(state))
 
 

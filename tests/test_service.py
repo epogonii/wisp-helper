@@ -65,7 +65,7 @@ ACTIONS = {
     'CreateConfig': ('(ss)', ('srv', '/srv')),
     'DeleteConfig': ('(s)', ('home',)),
     'UndoChange': ('(suuas)', ('root', 1, 2, ['/etc/hostname'])),
-    'Rollback': ('(su)', ('root', 5)),
+    'Rollback': ('(su)', ('root', 2)),
     'SetMaintenance': ('(a{ss})', ({'BTRFS_SCRUB_PERIOD': 'monthly'},)),
 }
 
@@ -258,6 +258,7 @@ def launch(address, bus, polkit, snapper, runtime, systemctl, maintenance, tmp_p
     mountinfo.write_text(MOUNTINFO)
     (tmp_path / 'cmdline').write_text(CMDLINE)
     (tmp_path / 'fstab').write_text(FSTAB)
+    executed = tmp_path / 'executed'
 
     def launch(uid=USER.pw_uid, idle=None, extra=()):
         code = [
@@ -271,6 +272,8 @@ def launch(address, bus, polkit, snapper, runtime, systemctl, maintenance, tmp_p
             f'layout.inode = lambda path: {INODES!r}.get(path, 0)',
             f'layout.names = lambda path: {NAMES!r}.get(path, [])',
             'swap.default_kernel = lambda: "/boot/vmlinuz-7.2.8"',
+            # Never the real mount and renames.
+            f'swap.execute = lambda plan: open({str(executed)!r}, "a").write(repr(plan))',
             f'maintenance.PATHS = ({str(maintenance)!r},)',
             f'maintenance.SYSTEMCTL = {str(systemctl.path)!r}',
         ]
@@ -366,7 +369,7 @@ def test_not_authorized(bus, helper, method):
 
 def test_authorized(bus, helper, polkit):
     polkit.allow('rollback')
-    assert refusal(bus, 'Rollback') == 'Unsupported'
+    assert call(bus, 'Rollback')[0]['mode'] == 'swap'
     assert refusal(bus, 'SetMaintenance') == 'NotAuthorized'
 
 
@@ -739,3 +742,61 @@ def test_stop_after_action(bus, helper, polkit, snapper):
 def test_stop_idle(helper):
     helper.terminate()
     assert helper.wait(timeout=5) == 0
+
+
+def test_rollback_swap(bus, helper, polkit, snapper, tmp_path, runtime):
+    polkit.allow('rollback')
+    assert call(bus, 'Rollback') == ({'mode': 'swap', 'backup': 3, 'kernel': ''},)
+    executed = (tmp_path / 'executed').read_text()
+    assert executed.startswith("Plan(source='/dev/vda3', subvolume='root', number=2, backup=3,")
+    assert (runtime / 'rollback-pending').exists()
+    assert info(bus)['pending'] is True
+    # A second one would rename the renamed root.
+    assert refusal(bus, 'Rollback') == 'Pending'
+    assert len(polkit.calls()) == 1
+    assert ['-c', 'root', 'rollback', '2'] not in snapper.calls()
+
+
+def test_rollback_native(bus, helper, polkit, snapper, tmp_path, runtime):
+    snapper.set(CONFIGS, default={'root': [1, False]})
+    (tmp_path / 'fstab').write_text('UUID=1b2c / btrfs defaults 0 0\n')
+    polkit.allow('rollback')
+    assert call(bus, 'Rollback') == ({'mode': 'native', 'backup': 3, 'kernel': ''},)
+    assert ['-c', 'root', 'rollback', '2'] in snapper.calls()
+    assert snapper.state()['default'] == {'root': [4, False]}
+    assert not (tmp_path / 'executed').exists()
+    assert (runtime / 'rollback-pending').exists()
+
+
+# Not the config of /, no config, the running system, no such snapshot.
+@pytest.mark.parametrize('config, number', [('home', 3), ('srv', 2), ('root', 0), ('root', 7)])
+def test_rollback_invalid(bus, helper, polkit, config, number):
+    polkit.allow('rollback')
+    assert refusal(bus, 'Rollback', config, number) == 'Invalid'
+    assert polkit.calls() == []
+
+
+# The root asked for by id, and a snapshot that is not there.
+@pytest.mark.parametrize('fstab, number', [('UUID=1b2c / btrfs subvolid=287 0 0\n', 2), (FSTAB, 1)])
+def test_rollback_unsupported(bus, helper, polkit, tmp_path, fstab, number):
+    (tmp_path / 'fstab').write_text(fstab)
+    polkit.allow('rollback')
+    assert refusal(bus, 'Rollback', 'root', number) == 'Unsupported'
+    assert polkit.calls() == []
+    assert not (tmp_path / 'executed').exists()
+
+
+def test_rollback_not_authorized(bus, helper, tmp_path, runtime):
+    assert refusal(bus, 'Rollback') == 'NotAuthorized'
+    assert not (tmp_path / 'executed').exists()
+    assert not (runtime / 'rollback-pending').exists()
+
+
+def test_rollback_failed(bus, launch, polkit, runtime):
+    fail = ['def fail(plan):', '    raise swap.Failed("mv root root.x failed")']
+    launch(extra=[*fail, 'swap.execute = fail'])
+    polkit.allow('rollback')
+    with pytest.raises(GLib.Error) as info:
+        call(bus, 'Rollback')
+    assert remote_error(info.value) == 'Failed'
+    assert not (runtime / 'rollback-pending').exists()

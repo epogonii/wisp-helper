@@ -120,6 +120,11 @@ def fstab_options():
     return []
 
 
+def mark_pending():
+    with open(PENDING, 'w'):
+        pass
+
+
 def asked(flags):
     return [flag[7:].strip('/') for flag in flags if flag.startswith('subvol=')]
 

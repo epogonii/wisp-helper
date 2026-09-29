@@ -20,7 +20,7 @@ from wisp_helper import (
     swap,
     validate,
 )
-from wisp_helper.errors import Busy, Error, Failed, NotAuthorized, Unsupported
+from wisp_helper.errors import Busy, Error, Failed, NotAuthorized, Pending, Unsupported
 
 log = logging.getLogger(__name__)
 
@@ -95,8 +95,20 @@ def distro():
         return 'linux'
 
 
-def unwritten(*args):
-    raise Unsupported('not written yet')
+def rollback_mode(configs):
+    mode, why = layout.rollback(configs, snapper.default_snapshot)
+    if why == 'pending':
+        raise Pending('restart the computer to finish the rollback first')
+    if mode == 'none':
+        raise Unsupported(f'this system cannot roll back ({why})')
+    return mode
+
+
+def swap_plan(number):
+    try:
+        return swap.plan(number, datetime.datetime.now().astimezone(), swap.default_kernel)
+    except swap.Refused as error:
+        raise Unsupported(f'{error} ({error.code})') from None
 
 
 class Call:
@@ -173,9 +185,9 @@ class Service:
     def on_call(self, connection, sender, path, interface, method, params, invocation):
         self.restart_timer()
         call = Call(connection, invocation)
-        handler = getattr(self, method, None)
+        handler = getattr(self, method)
         if method not in ACTIONS:
-            self.later(self.readers, lambda: (handler or unwritten)(call, *call.args), call.done)
+            self.later(self.readers, lambda: handler(call, *call.args), call.done)
         elif self.busy:
             call.fail(Busy('another action is running'))
         else:
@@ -183,7 +195,7 @@ class Service:
             # The handler checks the arguments and returns the work to run after polkit.
             self.later(
                 self.worker,
-                lambda: handler(call, *call.args) if handler else unwritten,
+                lambda: handler(call, *call.args),
                 lambda work: self.authorize(connection, call, work),
             )
 
@@ -315,6 +327,34 @@ class Service:
             'refused': GLib.Variant('s', why),
         }
         return GLib.Variant('(a{sv})', (found,))
+
+    def Rollback(self, call, config, number):
+        configs = snapper.configs()
+        validate.root_config(config, configs)
+        validate.rollback_snapshot(number, snapper.numbers(config))
+        mode = rollback_mode(configs)
+        if mode == 'swap':
+            swap_plan(number)
+
+        # Worked out again, in case something changed while polkit asked.
+        def work():
+            if rollback_mode(snapper.configs()) != mode:
+                raise Failed('the system changed, try again')
+            if mode == 'native':
+                backup, kernel = snapper.rollback(config, number), ''
+            else:
+                plan = swap_plan(number)
+                swap.execute(plan)
+                backup, kernel = plan.backup, plan.kernel
+            layout.mark_pending()
+            done = {
+                'mode': GLib.Variant('s', mode),
+                'backup': GLib.Variant('u', backup),
+                'kernel': GLib.Variant('s', kernel),
+            }
+            return GLib.Variant('(a{sv})', (done,))
+
+        return work
 
     def SetMaintenance(self, call, values):
         validate.periods(values)
