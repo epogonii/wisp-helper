@@ -35,8 +35,9 @@ def read(*args):
         raise Failed(f'cannot read snapper output: {error}') from None
 
 
+# Each config's name with the subvolume it takes snapshots of.
 def configs():
-    return {row['config'] for row in read('list-configs')['configs']}
+    return {row['config']: row['subvolume'] for row in read('list-configs')['configs']}
 
 
 def get_config(config):
@@ -45,6 +46,14 @@ def get_config(config):
 
 def set_config(config, values):
     snapper('-c', config, 'set-config', *(f'{key}={value}' for key, value in values.items()))
+
+
+def create_config(config, subvolume):
+    snapper('-c', config, 'create-config', subvolume)
+
+
+def delete_config(config):
+    snapper('-c', config, 'delete-config')
 
 
 # What to set so that user may use the config. Empty if it may already.

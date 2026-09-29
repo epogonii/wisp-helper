@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from gi.repository import Gio, GLib
 
-from wisp_helper import API_VERSION, PATH, VERSION, maintenance, polkit, snapper, validate
+from wisp_helper import API_VERSION, PATH, VERSION, layout, maintenance, polkit, snapper, validate
 from wisp_helper.errors import Busy, Error, Failed, NotAuthorized, Unsupported
 
 log = logging.getLogger(__name__)
@@ -225,3 +225,22 @@ class Service:
                 snapper.set_config(config, values)
 
         return work
+
+    def SetConfig(self, call, config, values):
+        validate.settings(values)
+        validate.config(config, snapper.configs())
+        return lambda: snapper.set_config(config, values)
+
+    def ListSubvolumes(self, call):
+        subvolumes = layout.subvolumes(snapper.configs().values())
+        return GLib.Variant('(as)', (subvolumes,))
+
+    def CreateConfig(self, call, config, subvolume):
+        configs = snapper.configs()
+        validate.new_config(config, configs)
+        validate.new_subvolume(subvolume, layout.subvolumes(configs.values()))
+        return lambda: snapper.create_config(config, subvolume)
+
+    def DeleteConfig(self, call, config):
+        validate.config(config, snapper.configs())
+        return lambda: snapper.delete_config(config)

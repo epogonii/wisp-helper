@@ -42,15 +42,22 @@ def main(args):
             {'config': name, 'subvolume': values['SUBVOLUME']} for name, values in configs.items()
         ]
         print(json.dumps({'configs': rows}))
+    elif command == 'create-config' and config not in configs:
+        (subvolume,) = rest
+        configs[config] = {'SUBVOLUME': subvolume, 'ALLOW_USERS': '', 'SYNC_ACL': 'no'}
     elif config not in configs:
         fail('Unknown config.')
     elif command == 'get-config' and jsonout:
         print(json.dumps(configs[config]))
     elif command == 'set-config':
         configs[config].update(value.split('=', 1) for value in rest)
-        STATE.write_text(json.dumps(state))
+    elif command == 'delete-config' and not rest:
+        del configs[config]
     else:
         fail(f'unexpected call: {args}')
+    # A read may run next to a change, so only changes write.
+    if command in ('create-config', 'set-config', 'delete-config'):
+        STATE.write_text(json.dumps(state))
 
 
 if __name__ == '__main__':

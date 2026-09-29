@@ -41,7 +41,7 @@ def test_allow_user(values, changes):
 def test_configs(fake):
     rows = [{'config': 'root', 'subvolume': '/'}, {'config': 'home', 'subvolume': '/home'}]
     fake(f"echo '{json.dumps({'configs': rows})}'")
-    assert snapper.configs() == {'root', 'home'}
+    assert snapper.configs() == {'root': '/', 'home': '/home'}
 
 
 def test_argv(fake, tmp_path, monkeypatch):
@@ -51,6 +51,14 @@ def test_argv(fake, tmp_path, monkeypatch):
     *args, lc_all, leaked = (tmp_path / 'args').read_text().splitlines()
     assert args == ['-c', 'root', 'set-config', 'NUMBER_LIMIT=10', 'ALLOW_USERS=ann bob']
     assert (lc_all, leaked) == ('C.UTF-8', '')
+
+
+def test_config_argv(fake, tmp_path):
+    fake(f'printf "%s\\n" "$@" >> "{tmp_path}/args"')
+    snapper.create_config('srv', '/srv')
+    snapper.delete_config('srv')
+    lines = (tmp_path / 'args').read_text().splitlines()
+    assert lines == ['-c', 'srv', 'create-config', '/srv', '-c', 'srv', 'delete-config']
 
 
 def test_failed(fake):

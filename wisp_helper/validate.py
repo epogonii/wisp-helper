@@ -11,6 +11,21 @@ CONFIG_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,63}')
 # ALLOW_USERS is split on spaces, so a name with one would let in someone else.
 USER_NAME = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.@-]{0,255}')
 
+# The config keys Wisp's prefs change. ALLOW_USERS and SYNC_ACL go through GrantAccess.
+SWITCHES = {'TIMELINE_CREATE', 'NUMBER_CLEANUP'}
+LIMITS = {
+    'NUMBER_LIMIT',
+    'NUMBER_LIMIT_IMPORTANT',
+    'TIMELINE_LIMIT_HOURLY',
+    'TIMELINE_LIMIT_DAILY',
+    'TIMELINE_LIMIT_WEEKLY',
+    'TIMELINE_LIMIT_MONTHLY',
+    'TIMELINE_LIMIT_QUARTERLY',
+    'TIMELINE_LIMIT_YEARLY',
+}
+# A number, or a range like 2-10 that snapper narrows as the disk fills up.
+LIMIT = re.compile(r'([0-9]{1,6})(?:-([0-9]{1,6}))?')
+
 
 def user(uid):
     if uid == 0:
@@ -37,3 +52,25 @@ def new_config(name, configs):
     if name in configs:
         raise Invalid(f'config {name!r} already exists')
     return name
+
+
+def new_subvolume(path, candidates):
+    if path not in candidates:
+        raise Invalid(f'cannot make a config for {path!r}')
+    return path
+
+
+def settings(values):
+    if not values:
+        raise Invalid('nothing to change')
+    for key, value in values.items():
+        if key in SWITCHES:
+            good = value in ('yes', 'no')
+        elif key in LIMITS:
+            match = LIMIT.fullmatch(value)
+            good = match and (match[2] is None or int(match[1]) <= int(match[2]))
+        else:
+            raise Invalid(f'cannot change {key}')
+        if not good:
+            raise Invalid(f'{key} cannot be {value!r}')
+    return values

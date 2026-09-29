@@ -26,14 +26,26 @@ USER = pwd.getpwnam('nobody')
 LIST = ['--jsonout', 'list-configs']
 GET = ['--jsonout', '-c', 'root', 'get-config']
 
-CONFIGS = {'root': {'SUBVOLUME': '/', 'ALLOW_USERS': '', 'SYNC_ACL': 'no'}}
+CONFIGS = {
+    'root': {'SUBVOLUME': '/', 'ALLOW_USERS': '', 'SYNC_ACL': 'no'},
+    'home': {'SUBVOLUME': '/home', 'ALLOW_USERS': '', 'SYNC_ACL': 'no'},
+}
+
+# /srv is the one subvolume left without a config.
+MOUNTINFO = """\
+609 1 0:36 /root / rw,relatime shared:1 - btrfs /dev/vda3 rw,seclabel,subvolid=287,subvol=/root
+610 609 0:36 /home /home rw,relatime shared:2 - btrfs /dev/vda3 rw,seclabel,subvolid=256,subvol=/home
+611 609 0:36 /srv /srv rw,relatime shared:3 - btrfs /dev/vda3 rw,seclabel,subvolid=258,subvol=/srv
+612 609 259:2 / /boot rw,relatime shared:4 - ext4 /dev/vda2 rw,seclabel
+613 609 0:36 /root/var/tmp/systemd-private-x/tmp /var/tmp rw,relatime shared:5 master:1 - btrfs /dev/vda3 rw,seclabel,subvolid=287,subvol=/root
+"""  # noqa: E501
 
 # A call for every method that needs polkit.
 ACTIONS = {
     'GrantAccess': ('(s)', ('root',)),
     'SetConfig': ('(sa{ss})', ('root', {'NUMBER_LIMIT': '10'})),
     'CreateConfig': ('(ss)', ('srv', '/srv')),
-    'DeleteConfig': ('(s)', ('srv',)),
+    'DeleteConfig': ('(s)', ('home',)),
     'UndoChange': ('(suuas)', ('root', 1, 2, ['/etc/hostname'])),
     'Rollback': ('(su)', ('root', 5)),
     'SetMaintenance': ('(a{ss})', ({'BTRFS_SCRUB_PERIOD': 'monthly'},)),
@@ -172,13 +184,16 @@ def snapper(tmp_path):
 
 
 @pytest.fixture
-def launch(address, bus, polkit, snapper):
+def launch(address, bus, polkit, snapper, tmp_path):
     processes = []
+    mountinfo = tmp_path / 'mountinfo'
+    mountinfo.write_text(MOUNTINFO)
 
     def launch(uid=USER.pw_uid, idle=None):
         code = [
-            'from wisp_helper import __main__, polkit, service, snapper',
+            'from wisp_helper import __main__, layout, polkit, service, snapper',
             f'snapper.SNAPPER = {str(snapper.path)!r}',
+            f'layout.MOUNTINFO = {str(mountinfo)!r}',
         ]
         if uid is not None:
             code.append(f'polkit.caller_uid = lambda bus, sender: {uid}')
@@ -220,9 +235,9 @@ def test_not_authorized(bus, helper, method):
 
 
 def test_authorized(bus, helper, polkit):
-    polkit.allow('set-config')
-    assert refusal(bus, 'SetConfig') == 'Unsupported'
-    assert refusal(bus, 'DeleteConfig') == 'NotAuthorized'
+    polkit.allow('undo-change')
+    assert refusal(bus, 'UndoChange') == 'Unsupported'
+    assert refusal(bus, 'Rollback') == 'NotAuthorized'
 
 
 def test_polkit_request(bus, helper, polkit):
@@ -342,3 +357,73 @@ def test_answers_while_snapper_runs(bus, helper, polkit, snapper):
         GLib.MainContext.default().iteration(True)
     with pytest.raises(GLib.Error):
         bus.call_finish(results[0])
+
+
+def test_set_config(bus, helper, polkit, snapper):
+    polkit.allow('set-config')
+    call(bus, 'SetConfig', 'home', {'NUMBER_LIMIT': '2-10', 'TIMELINE_CREATE': 'no'})
+    set_config = ['-c', 'home', 'set-config', 'NUMBER_LIMIT=2-10', 'TIMELINE_CREATE=no']
+    assert snapper.calls() == [LIST, set_config]
+    assert snapper.configs()['home']['NUMBER_LIMIT'] == '2-10'
+
+
+@pytest.mark.parametrize(
+    'values', [{}, {'ALLOW_USERS': 'nobody'}, {'SUBVOLUME': '/'}, {'NUMBER_LIMIT': '10-2'}]
+)
+def test_set_config_invalid(bus, helper, polkit, snapper, values):
+    polkit.allow('set-config')
+    assert refusal(bus, 'SetConfig', 'root', values) == 'Invalid'
+    assert polkit.calls() == []
+    assert snapper.calls() == []
+
+
+def test_set_config_unknown_config(bus, helper, polkit, snapper):
+    assert refusal(bus, 'SetConfig', 'srv', {'NUMBER_LIMIT': '10'}) == 'Invalid'
+    assert polkit.calls() == []
+    assert snapper.calls() == [LIST]
+
+
+def test_list_subvolumes(bus, helper, snapper):
+    assert request(bus, NAME, PATH, NAME, 'ListSubvolumes', reply='(as)') == (['/srv'],)
+    assert snapper.calls() == [LIST]
+
+
+def test_create_config(bus, helper, polkit, snapper):
+    polkit.allow('create-config')
+    call(bus, 'CreateConfig')
+    assert snapper.calls() == [LIST, ['-c', 'srv', 'create-config', '/srv']]
+    assert snapper.configs()['srv']['SUBVOLUME'] == '/srv'
+    assert request(bus, NAME, PATH, NAME, 'ListSubvolumes', reply='(as)') == ([],)
+
+
+# Taken, a bad name, a path that is not a mount, a bind mount, not btrfs.
+@pytest.mark.parametrize(
+    'config, subvolume',
+    [
+        ('home', '/srv'),
+        ('.srv', '/srv'),
+        ('srv', '/srv/data'),
+        ('tmp', '/var/tmp'),
+        ('boot', '/boot'),
+        ('root2', '/'),
+    ],
+)
+def test_create_config_invalid(bus, helper, polkit, snapper, config, subvolume):
+    polkit.allow('create-config')
+    assert refusal(bus, 'CreateConfig', config, subvolume) == 'Invalid'
+    assert polkit.calls() == []
+    assert snapper.calls() == [LIST]
+
+
+def test_delete_config(bus, helper, polkit, snapper):
+    polkit.allow('delete-config')
+    call(bus, 'DeleteConfig')
+    assert snapper.calls() == [LIST, ['-c', 'home', 'delete-config']]
+    assert snapper.configs().keys() == {'root'}
+
+
+def test_delete_config_unknown_config(bus, helper, polkit, snapper):
+    polkit.allow('delete-config')
+    assert refusal(bus, 'DeleteConfig', 'srv') == 'Invalid'
+    assert polkit.calls() == []
+    assert snapper.configs().keys() == {'root', 'home'}

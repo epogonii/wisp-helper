@@ -80,3 +80,49 @@ def test_user(accounts):
 def test_user_refused(accounts, uid):
     with pytest.raises(errors.Invalid):
         validate.user(uid)
+
+
+@pytest.mark.parametrize(
+    'values',
+    [
+        {'TIMELINE_CREATE': 'yes'},
+        {'NUMBER_CLEANUP': 'no', 'NUMBER_LIMIT': '50'},
+        {'NUMBER_LIMIT': '2-10', 'NUMBER_LIMIT_IMPORTANT': '4-4'},
+        {'TIMELINE_LIMIT_HOURLY': '0', 'TIMELINE_LIMIT_YEARLY': '5-10'},
+        {'TIMELINE_LIMIT_QUARTERLY': '999999'},
+    ],
+)
+def test_settings(values):
+    assert validate.settings(values) == values
+
+
+@pytest.mark.parametrize(
+    'values',
+    [
+        {},
+        {'ALLOW_USERS': 'ann'},
+        {'SYNC_ACL': 'yes'},
+        {'SUBVOLUME': '/'},
+        {'NUMBER_LIMIT': '10', 'FSTYPE': 'btrfs'},
+        {'TIMELINE_CREATE': 'true'},
+        {'TIMELINE_CREATE': ''},
+        {'NUMBER_LIMIT': ''},
+        {'NUMBER_LIMIT': '-1'},
+        {'NUMBER_LIMIT': '10-2'},
+        {'NUMBER_LIMIT': '1-2-3'},
+        {'NUMBER_LIMIT': '1000000'},
+        {'NUMBER_LIMIT': ' 10'},
+        {'NUMBER_LIMIT': '10\n'},
+        {'NUMBER_LIMIT': '\u0661\u0660'},
+        {'NUMBER_LIMIT': '10"\nALLOW_USERS="ann'},
+    ],
+)
+def test_settings_refused(values):
+    with pytest.raises(errors.Invalid):
+        validate.settings(values)
+
+
+def test_new_subvolume():
+    assert validate.new_subvolume('/srv', ['/home', '/srv']) == '/srv'
+    with pytest.raises(errors.Invalid):
+        validate.new_subvolume('/srv/', ['/home', '/srv'])
