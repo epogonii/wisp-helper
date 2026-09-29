@@ -2,13 +2,24 @@
 
 """The D-Bus object and its methods."""
 
+import datetime
 import logging
 import platform
 from concurrent.futures import ThreadPoolExecutor
 
 from gi.repository import Gio, GLib
 
-from wisp_helper import API_VERSION, PATH, VERSION, layout, maintenance, polkit, snapper, validate
+from wisp_helper import (
+    API_VERSION,
+    PATH,
+    VERSION,
+    layout,
+    maintenance,
+    polkit,
+    snapper,
+    swap,
+    validate,
+)
 from wisp_helper.errors import Busy, Error, Failed, NotAuthorized, Unsupported
 
 log = logging.getLogger(__name__)
@@ -121,13 +132,14 @@ class Call:
             log.info('%s: %s', self, type(error).__name__)
         else:
             log.info('%s: %s: %s', self, type(error).__name__, error)
-        self.invocation.return_dbus_error(error.dbus_name(), str(error))
+        self.invocation.return_dbus_error(error.dbus_name(), snapper.printable(str(error)))
 
 
 class Service:
     def __init__(self, quit):
         self.quit = quit
         self.busy = False
+        self.stopping = False
         self.jobs = 0
         self.timer = 0
         # Programs run in these threads, the main loop only talks D-Bus.
@@ -213,6 +225,18 @@ class Service:
         self.busy = False
         self.restart_timer()
         call.done(result)
+        if self.stopping:
+            self.quit()
+
+    # systemd stops the helper with SIGTERM. A rollback or undochange is not
+    # left halfway for that.
+    def stop(self):
+        if self.busy:
+            log.info('Stopping once the action is done')
+            self.stopping = True
+        else:
+            self.quit()
+        return GLib.SOURCE_CONTINUE
 
     def GetInfo(self, call):
         pending = layout.pending()
@@ -221,6 +245,10 @@ class Service:
         except Unsupported:
             # No snapper, so no config for / either.
             mode, why = 'none', 'no-root-config'
+        except Failed as error:
+            # The rest is still worth an answer.
+            log.warning('Cannot tell which rollback fits: %s', error)
+            mode, why = 'none', 'snapper'
         info = {
             'version': GLib.Variant('s', VERSION),
             'distro': GLib.Variant('s', distro()),
@@ -267,6 +295,26 @@ class Service:
         paths = validate.paths(paths, configs[config])
         validate.snapshots(first, last, snapper.numbers(config))
         return lambda: snapper.undo_change(config, first, last, paths)
+
+    def PlanRollback(self, call, config, number):
+        configs = snapper.configs()
+        validate.root_config(config, configs)
+        validate.rollback_snapshot(number, snapper.numbers(config))
+        mode, why = layout.rollback(configs, snapper.default_snapshot)
+        backup, kernel = 0, ''
+        if mode == 'swap':
+            try:
+                plan = swap.plan(number, datetime.datetime.now().astimezone(), swap.default_kernel)
+                backup, kernel = plan.backup, plan.kernel
+            except swap.Refused as error:
+                why = error.code
+        found = {
+            'mode': GLib.Variant('s', mode),
+            'backup': GLib.Variant('u', backup),
+            'kernel': GLib.Variant('s', kernel),
+            'refused': GLib.Variant('s', why),
+        }
+        return GLib.Variant('(a{sv})', (found,))
 
     def SetMaintenance(self, call, values):
         validate.periods(values)

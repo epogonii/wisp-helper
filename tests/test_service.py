@@ -45,6 +45,10 @@ REFRESH = ['start', 'btrfsmaintenance-refresh.service']
 CMDLINE = 'BOOT_IMAGE=(hd0,gpt2)/vmlinuz-6.17.1 root=UUID=1b2c ro rootflags=subvol=root quiet\n'
 FSTAB = 'UUID=1b2c / btrfs subvol=root,compress=zstd:1 0 0\n'
 
+# The running root with its .snapshots, and snapshot 2 in it.
+INODES = {'/.snapshots': 256, '/.snapshots/2/snapshot': 256, '/.snapshots/2/snapshot/.snapshots': 2}
+NAMES = {'/.snapshots': ['1', '2']}
+
 # /srv is the one subvolume left without a config.
 MOUNTINFO = """\
 609 1 0:36 /root / rw,relatime shared:1 - btrfs /dev/vda3 rw,seclabel,subvolid=287,subvol=/root
@@ -257,14 +261,16 @@ def launch(address, bus, polkit, snapper, runtime, systemctl, maintenance, tmp_p
 
     def launch(uid=USER.pw_uid, idle=None, extra=()):
         code = [
-            'from wisp_helper import __main__, layout, maintenance, polkit, service, snapper',
+            'from wisp_helper import __main__, layout, maintenance, polkit, service, snapper, swap',
             f'snapper.SNAPPER = {str(snapper.path)!r}',
             f'snapper.RUNTIME_DIR = {str(runtime)!r}',
             f'layout.MOUNTINFO = {str(mountinfo)!r}',
             f'layout.CMDLINE = {str(tmp_path / "cmdline")!r}',
             f'layout.FSTAB = {str(tmp_path / "fstab")!r}',
             f'layout.PENDING = {str(runtime / "rollback-pending")!r}',
-            'layout.inode = lambda path: {"/.snapshots": 256}.get(path, 0)',
+            f'layout.inode = lambda path: {INODES!r}.get(path, 0)',
+            f'layout.names = lambda path: {NAMES!r}.get(path, [])',
+            'swap.default_kernel = lambda: "/boot/vmlinuz-7.2.8"',
             f'maintenance.PATHS = ({str(maintenance)!r},)',
             f'maintenance.SYSTEMCTL = {str(systemctl.path)!r}',
         ]
@@ -322,7 +328,7 @@ def rollback(bus):
 
 def test_info_native(bus, helper, snapper, tmp_path):
     snapper.set(CONFIGS, default={'root': [2, False]})
-    assert rollback(bus) == ('none', 'fstab')
+    assert rollback(bus) == ('swap', '')
     (tmp_path / 'fstab').write_text('UUID=1b2c / btrfs defaults 0 0\n')
     assert rollback(bus) == ('native', '')
     snapper.set(CONFIGS, default={'root': [2, True]})
@@ -339,6 +345,12 @@ def test_info_no_root_config(bus, helper, snapper):
     snapper.set({'home': CONFIGS['home']})
     assert rollback(bus) == ('none', 'no-root-config')
     assert snapper.calls() == [LIST]
+
+
+def test_info_snapper_failed(bus, helper, snapper):
+    snapper.set(CONFIGS, fail={'list-configs': 'Failure (org.opensuse.Snapper.Error.Timeout).'})
+    assert rollback(bus) == ('none', 'snapper')
+    assert info(bus)['version'] == VERSION
 
 
 def test_info_no_snapper(bus, launch):
@@ -653,3 +665,77 @@ def test_set_maintenance_failed(bus, helper, polkit, systemctl, maintenance):
     assert info.value.message.endswith(': Unit btrfsmaintenance-refresh.service not found.')
     assert maintenance.read_text() == MAINTENANCE.replace('"monthly"', '"weekly"')
     assert systemctl.calls() == [REFRESH]
+
+
+def plan_rollback(bus, config='root', number=2):
+    args = GLib.Variant('(su)', (config, number))
+    (found,) = request(bus, NAME, PATH, NAME, 'PlanRollback', args, '(a{sv})')
+    return found
+
+
+def test_plan_rollback(bus, helper, polkit, snapper):
+    assert plan_rollback(bus) == {'mode': 'swap', 'backup': 3, 'kernel': '', 'refused': ''}
+    assert snapper.calls() == [LIST, NUMBERS, DEFAULT]
+    assert polkit.calls() == []
+
+
+def test_plan_rollback_no_snapshot(bus, helper):
+    assert plan_rollback(bus, number=1) == {
+        'mode': 'swap',
+        'backup': 0,
+        'kernel': '',
+        'refused': 'no-snapshot',
+    }
+
+
+def test_plan_rollback_native(bus, helper, snapper, tmp_path):
+    snapper.set(CONFIGS, default={'root': [1, False]})
+    (tmp_path / 'fstab').write_text('UUID=1b2c / btrfs defaults 0 0\n')
+    assert plan_rollback(bus) == {'mode': 'native', 'backup': 0, 'kernel': '', 'refused': ''}
+
+
+def test_plan_rollback_pending(bus, helper, runtime):
+    (runtime / 'rollback-pending').touch()
+    assert plan_rollback(bus)['refused'] == 'pending'
+
+
+# Not the config of /, no config, the running system, no such snapshot.
+@pytest.mark.parametrize('config, number', [('home', 3), ('srv', 2), ('root', 0), ('root', 7)])
+def test_plan_rollback_invalid(bus, helper, config, number):
+    with pytest.raises(GLib.Error) as info:
+        plan_rollback(bus, config, number)
+    assert remote_error(info.value) == 'Invalid'
+
+
+def test_stop_after_action(bus, helper, polkit, snapper):
+    snapper.set(CONFIGS, sleep={'undochange': 2})
+    polkit.allow('undo-change')
+    signature, args = ACTIONS['UndoChange']
+    results = []
+    bus.call(
+        NAME,
+        PATH,
+        NAME,
+        'UndoChange',
+        GLib.Variant(signature, args),
+        None,
+        Gio.DBusCallFlags.NONE,
+        10000,
+        None,
+        lambda bus, result: results.append(result),
+    )
+    # By now undochange runs.
+    time.sleep(0.5)
+    helper.terminate()
+    with pytest.raises(subprocess.TimeoutExpired):
+        helper.wait(timeout=1)
+    while not results:
+        GLib.MainContext.default().iteration(True)
+    bus.call_finish(results[0])
+    assert helper.wait(timeout=5) == 0
+    assert snapper.undone() != []
+
+
+def test_stop_idle(helper):
+    helper.terminate()
+    assert helper.wait(timeout=5) == 0

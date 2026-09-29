@@ -10,7 +10,10 @@ MOUNTINFO = '/proc/self/mountinfo'
 CMDLINE = '/proc/cmdline'
 FSTAB = '/etc/fstab'
 # The unit's RuntimeDirectory keeps it until the machine starts again.
-PENDING = '/run/wisp-helper/rollback-pending'
+RUNTIME_DIR = '/run/wisp-helper'
+PENDING = f'{RUNTIME_DIR}/rollback-pending'
+# Where the running system's files are looked at. Tests point it at an image.
+ROOT = '/'
 
 # The top directory of a subvolume has inode 256. A snapshot has an empty
 # directory with inode 2 where the original had a subvolume of its own.
@@ -72,6 +75,7 @@ def subvolumes(taken):
         if whole(seen(path, table))
         and path not in taken
         and '.snapshots' not in path.split('/')
+        and not path.startswith(f'{RUNTIME_DIR}/')
         and plain(path)
     )
 
@@ -84,11 +88,22 @@ def read(path):
         return ''
 
 
+def at(path):
+    return os.path.join(ROOT, path.lstrip('/'))
+
+
 def inode(path):
     try:
-        return os.lstat(path).st_ino
+        return os.lstat(at(path)).st_ino
     except OSError:
         return 0
+
+
+def names(path):
+    try:
+        return os.listdir(at(path))
+    except OSError:
+        return []
 
 
 # What the kernel was asked to mount the root with.
@@ -117,7 +132,7 @@ def pending():
         return True
     root = seen('/', mounts())
     names = asked(rootflags())[-1:]
-    return root is not None and root.fstype == 'btrfs' and names not in ([], [root.root.strip('/')])
+    return root is not None and whole(root) and names not in ([], [root.root.strip('/')])
 
 
 # default(config) tells which snapshot btrfs mounts by default, as a row of
@@ -134,27 +149,32 @@ def rollback(configs, default):
         return 'none', 'not-btrfs'
     fstab = fstab_options()
 
-    # snapper rolls back by pointing btrfs at another default subvolume.
+    # snapper rolls back by pointing btrfs at another default subvolume, which
+    # fstab overrules when it names the root.
     row = default(config)
     if row is not None:
         if row['read-only']:
             return 'none', 'transactional'
-        # fstab would still mount the old one.
-        if any(option.startswith(('subvol=', 'subvolid=')) for option in fstab):
-            return 'none', 'fstab'
-        return 'native', ''
+        if not any(option.startswith(('subvol=', 'subvolid=')) for option in fstab):
+            return 'native', ''
+    why = no_swap(root, table, fstab)
+    if not why:
+        return 'swap', ''
+    return 'none', 'fstab' if row is not None else why
 
-    # A swap renames subvolumes, which does nothing to a root asked for by id.
+
+# A swap renames subvolumes, which does nothing to a root asked for by id.
+def no_swap(root, table, fstab):
     if root.root == '/':
-        return 'none', 'top-level'
+        return 'top-level'
     flags = rootflags()
     if any(option.startswith('subvolid=') for option in flags + fstab):
-        return 'none', 'by-id'
+        return 'by-id'
     if asked(flags)[-1:] != [root.root.strip('/')]:
-        return 'none', 'cmdline'
+        return 'cmdline'
     # .snapshots has to be a subvolume inside the root, as snapper makes it.
     if seen('/.snapshots', table) is not None:
-        return 'none', 'snapshots-mounted'
+        return 'snapshots-mounted'
     if inode('/.snapshots') != SUBVOLUME:
-        return 'none', 'snapshots-missing'
-    return 'swap', ''
+        return 'snapshots-missing'
+    return ''

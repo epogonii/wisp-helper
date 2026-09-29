@@ -51,6 +51,21 @@ def config(name, configs):
     return name
 
 
+# Only the config of / can be rolled back.
+def root_config(name, configs):
+    config(name, configs)
+    if configs[name] != '/':
+        raise Invalid(f'{name!r} is not the config of /')
+    return name
+
+
+# The running system, 0, is where a rollback starts from.
+def rollback_snapshot(number, numbers):
+    if number == 0 or number not in numbers:
+        raise Invalid(f'no snapshot {number} to roll back to')
+    return number
+
+
 def new_config(name, configs):
     if not CONFIG_NAME.fullmatch(name):
         raise Invalid(f'not a config name: {name!r}')

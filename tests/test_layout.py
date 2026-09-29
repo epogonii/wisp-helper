@@ -15,6 +15,9 @@ FEDORA = rb"""
 873 609 0:36 /root/var/tmp/systemd-private-aeddb912d3984eac91b604e0688e82d0-wisp-helper.service-3GSS0P/tmp /var/tmp rw,relatime shared:636 master:1 - btrfs /dev/nvme0n1p3 rw,seclabel,compress=zstd:1,ssd,space_cache=v2,subvolid=287,subvol=/root
 """  # noqa: E501
 
+TOP_MOUNT = rb"""880 609 0:36 / /run/wisp-helper/top-x1 rw - btrfs /dev/nvme0n1p3 rw,subvolid=5,subvol=/
+"""  # noqa: E501
+
 # Like openSUSE, where / is a snapshot and /.snapshots has a mount of its own.
 OPENSUSE = rb"""
 23 1 0:22 /@/.snapshots/1/snapshot / rw,relatime shared:1 - btrfs /dev/vda2 rw,space_cache=v2,subvolid=267,subvol=/@/.snapshots/1/snapshot
@@ -56,6 +59,8 @@ def mountinfo(tmp_path, monkeypatch):
         (FEDORA, ['/', '/home'], []),
         (OPENSUSE, ['/'], ['/boot/grub2/x86_64-efi', '/home', '/var']),
         (ODD, [], ['/mnt/comma', '/mnt/over', '/mnt/plain', '/run/media/ann/My Disk']),
+        # The top a swap mounts for a moment.
+        (FEDORA + TOP_MOUNT, ['/', '/home'], []),
     ],
 )
 def test_subvolumes(mountinfo, text, taken, found):
@@ -83,7 +88,9 @@ CONFIGS = {'root': '/', 'home': '/home'}
 DEFAULT = {'number': 1, 'default': True, 'read-only': False}
 
 # After a swap: the root the machine runs from was renamed into the new one's .snapshots.
-SWAPPED = FEDORA.replace(b'/root / rw', b'/root/.snapshots/26/snapshot / rw', 1)
+SWAPPED = FEDORA.replace(b'/root / rw', b'/root/.snapshots/26/snapshot / rw', 1).replace(
+    b'subvol=/root\n', b'subvol=/root/.snapshots/26/snapshot\n', 1
+)
 ARCH = rb"""
 30 1 0:25 /@ / rw,relatime shared:1 - btrfs /dev/sda2 rw,subvolid=256,subvol=/@
 31 30 0:25 /@snapshots /.snapshots rw,relatime shared:2 - btrfs /dev/sda2 rw,subvolid=258,subvol=/@snapshots
@@ -172,6 +179,14 @@ def test_native(system):
     assert rollback(row=DEFAULT) == ('native', '')
 
 
+# A snapshot once made default, and fstab asking for the root by name anyway.
+def test_default_overruled(system):
+    system()
+    assert rollback(row=DEFAULT) == ('swap', '')
+    system()['/.snapshots'] = 0
+    assert rollback(row=DEFAULT) == ('none', 'fstab')
+
+
 def test_no_native(system):
     system(OPENSUSE, 'root=UUID=77aa', OPENSUSE_FSTAB)
     assert rollback(row={**DEFAULT, 'read-only': True}) == ('none', 'transactional')
@@ -187,6 +202,12 @@ def test_pending(system, tmp_path):
     (tmp_path / 'rollback-pending').touch()
     assert layout.pending()
     assert rollback(row=DEFAULT) == ('none', 'pending')
+
+
+# ostree before composefs: / is a directory of the subvolume, bound there.
+def test_not_pending_bound(system):
+    system(FEDORA.replace(b'/root / rw', b'/root/ostree/deploy/fedora/deploy/1a2b.0 / rw', 1))
+    assert not layout.pending()
 
 
 def test_no_files(system, tmp_path):
