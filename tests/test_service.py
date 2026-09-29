@@ -274,6 +274,7 @@ def launch(address, bus, polkit, snapper, runtime, systemctl, maintenance, tmp_p
             f'layout.names = lambda path: {NAMES!r}.get(path, [])',
             'swap.default_kernel = lambda: "/boot/vmlinuz-7.2.8"',
             'swap.children = lambda subvolume: [".snapshots"]',
+            'swap.BTRFS, swap.MOUNT, swap.UMOUNT = "btrfs", "mount", "umount"',
             # Never the real mount and renames.
             f'swap.execute = lambda plan: open({str(executed)!r}, "a").write(repr(plan))',
             f'maintenance.PATHS = ({str(maintenance)!r},)',
