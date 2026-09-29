@@ -37,9 +37,10 @@ NESTED = ['var/lib/machines', 'var/lib/portables']
 
 
 class Refused(Exception):
-    def __init__(self, code, message):
+    def __init__(self, code, message, names=()):
         super().__init__(message)
         self.code = code
+        self.names = list(names)
 
 
 class Plan(NamedTuple):
@@ -67,6 +68,24 @@ def children(subvolume):
     return [path.removeprefix(f'{subvolume}/') for path in paths]
 
 
+# Docker keeps a subvolume for each layer, so paths deep down are cut back to
+# the directory above them until few are left.
+def short(paths, most=5):
+    paths = sorted(set(paths))
+    while len(paths) > most:
+        depth = [path.removesuffix('/*').count('/') for path in paths]
+        deepest = max(depth)
+        if deepest == 0:
+            break
+        paths = sorted(
+            {
+                path.removesuffix('/*').rsplit('/', 1)[0] + '/*' if level == deepest else path
+                for path, level in zip(paths, depth, strict=True)
+            }
+        )
+    return paths[:most], max(len(paths) - most, 0)
+
+
 # 6.10 comes after 6.9.
 def version_key(version):
     return [int(part) if part.isdigit() else part for part in re.split(r'(\d+)', version)]
@@ -75,6 +94,8 @@ def version_key(version):
 # What a swap to snapshot number would do, worked out from the running system
 # alone. layout.rollback() has said swap already.
 def plan(number, now, current_kernel):
+    if None in (BTRFS, MOUNT, UMOUNT):
+        raise Refused('no-tools', 'btrfs, mount or umount is not installed')
     table = layout.mounts()
     root = layout.seen('/', table)
     subvolume = root.root.strip('/')
@@ -98,7 +119,9 @@ def plan(number, now, current_kernel):
     # Any other would stay in the backup, with an empty directory for it in the new root.
     left = sorted(set(children(subvolume)) - set(moved))
     if left:
-        raise Refused('nested', f'subvolumes in the root would stay behind: {", ".join(left)}')
+        names, more = short(left)
+        listed = ', '.join(names) + (f' and {more} more' if more else '')
+        raise Refused('nested', f'subvolumes in the root would stay behind: {listed}', names)
 
     # A /boot of its own does not go back with the rest. A kernel there whose
     # modules the snapshot lacks would start without them.
@@ -141,6 +164,8 @@ def plan(number, now, current_kernel):
 
 # btrfs can fail with the copy already made.
 def copy(source, target):
+    if os.path.lexists(target):
+        raise Failed(f'{target} is there already')
     try:
         run([BTRFS, 'subvolume', 'snapshot', source, target], timeout=None)
     except Failed:

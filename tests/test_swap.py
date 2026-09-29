@@ -41,6 +41,8 @@ def system(tmp_path, monkeypatch):
     directories = {'/.snapshots': ['1', '2', '5', '10', 'x'], '/boot': []}
     monkeypatch.setattr(layout, 'inode', lambda path: inodes.get(path, 0))
     monkeypatch.setattr(layout, 'names', lambda path: directories.get(path, []))
+    for tool in ('BTRFS', 'MOUNT', 'UMOUNT'):
+        monkeypatch.setattr(swap, tool, tool.lower())
     # Subvolumes in the root are what has inode 256 there.
     other = []
     monkeypatch.setattr(
@@ -105,6 +107,49 @@ def test_plan_nested(system, path, left):
         plan()
     assert info.value.code == 'nested'
     assert str(info.value).endswith(f': {left}')
+
+
+def test_plan_docker(system):
+    inodes, _ = system
+    layers = [f'var/lib/docker/btrfs/subvolumes/{n:03}' for n in range(200)]
+    inodes['other'].extend([*layers, 'srv/vm'])
+    with pytest.raises(swap.Refused) as info:
+        plan()
+    assert info.value.names == ['srv/vm', 'var/lib/docker/btrfs/subvolumes/*']
+    assert str(info.value).endswith(': srv/vm, var/lib/docker/btrfs/subvolumes/*')
+
+
+@pytest.mark.parametrize(
+    'paths, found',
+    [
+        (['a', 'b'], (['a', 'b'], 0)),
+        ([f'x{n}' for n in range(7)], ([f'x{n}' for n in range(5)], 2)),
+        (['a/b/1', 'a/b/2', 'a/c', 'd', 'e', 'f'], (['a/b/*', 'a/c', 'd', 'e', 'f'], 0)),
+        (['a/b/1', 'a/b/2', 'a/c', 'd', 'e', 'f', 'g'], (['a/*', 'd', 'e', 'f', 'g'], 0)),
+        (['a/b/c/1', 'a/b/c/2', *'defgh'], (['a/*', 'd', 'e', 'f', 'g'], 1)),
+    ],
+)
+def test_short(paths, found):
+    assert swap.short(paths) == found
+
+
+def test_plan_no_btrfs(system, monkeypatch):
+    monkeypatch.setattr(swap, 'BTRFS', None)
+    with pytest.raises(swap.Refused) as info:
+        plan()
+    assert info.value.code == 'no-tools'
+
+
+def test_children(tmp_path, monkeypatch):
+    btrfs = tmp_path / 'btrfs'
+    btrfs.write_text(
+        '#!/bin/sh\n'
+        'echo "ID 258 gen 12 top level 256 path root/.snapshots"\n'
+        'echo "ID 301 gen 90 top level 256 path root/var/lib/my path"\n'
+    )
+    btrfs.chmod(0o755)
+    monkeypatch.setattr(swap, 'BTRFS', str(btrfs))
+    assert swap.children('root') == ['.snapshots', 'var/lib/my path']
 
 
 def test_plan_first_backup(system):
@@ -203,3 +248,11 @@ def test_copy_failed(tmp_path, monkeypatch):
     with pytest.raises(swap.Failed, match='^ERROR: cannot sync$'):
         swap.copy(str(tmp_path / 'snapshot'), str(tmp_path / 'copy'))
     assert not (tmp_path / 'copy').exists()
+
+
+# Not deleted when it was there before.
+def test_copy_there(tmp_path):
+    (tmp_path / 'copy').mkdir()
+    with pytest.raises(swap.Failed, match='is there already$'):
+        swap.copy(str(tmp_path / 'snapshot'), str(tmp_path / 'copy'))
+    assert (tmp_path / 'copy').exists()

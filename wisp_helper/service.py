@@ -330,18 +330,19 @@ class Service:
         # After a swap /.snapshots is gone until the restart.
         if why != 'pending':
             validate.rollback_snapshot(number, snapper.numbers(config))
-        backup, kernel = 0, ''
+        backup, kernel, nested = 0, '', []
         if mode == 'swap':
             try:
                 plan = swap.plan(number, datetime.datetime.now().astimezone(), swap.default_kernel)
                 backup, kernel = plan.backup, plan.kernel
             except swap.Refused as error:
-                why = error.code
+                why, nested = error.code, error.names
         found = {
             'mode': GLib.Variant('s', mode),
             'backup': GLib.Variant('u', backup),
             'kernel': GLib.Variant('s', kernel),
             'refused': GLib.Variant('s', why),
+            'nested': GLib.Variant('as', nested),
         }
         return GLib.Variant('(a{sv})', (found,))
 

@@ -678,7 +678,13 @@ def plan_rollback(bus, config='root', number=2):
 
 
 def test_plan_rollback(bus, helper, polkit, snapper):
-    assert plan_rollback(bus) == {'mode': 'swap', 'backup': 3, 'kernel': '', 'refused': ''}
+    assert plan_rollback(bus) == {
+        'mode': 'swap',
+        'backup': 3,
+        'kernel': '',
+        'refused': '',
+        'nested': [],
+    }
     assert snapper.calls() == [LIST, DEFAULT, NUMBERS]
     assert polkit.calls() == []
 
@@ -689,13 +695,26 @@ def test_plan_rollback_no_snapshot(bus, helper):
         'backup': 0,
         'kernel': '',
         'refused': 'no-snapshot',
+        'nested': [],
     }
 
 
 def test_plan_rollback_native(bus, helper, snapper, tmp_path):
     snapper.set(CONFIGS, default={'root': [1, False]})
     (tmp_path / 'fstab').write_text('UUID=1b2c / btrfs defaults 0 0\n')
-    assert plan_rollback(bus) == {'mode': 'native', 'backup': 0, 'kernel': '', 'refused': ''}
+    assert plan_rollback(bus) == {
+        'mode': 'native',
+        'backup': 0,
+        'kernel': '',
+        'refused': '',
+        'nested': [],
+    }
+
+
+def test_plan_rollback_nested(bus, launch):
+    launch(extra=['swap.children = lambda subvolume: [".snapshots", "var/lib/docker/x"]'])
+    found = plan_rollback(bus)
+    assert (found['refused'], found['nested']) == ('nested', ['var/lib/docker/x'])
 
 
 # After a swap snapper cannot open /.snapshots until the restart.
@@ -835,6 +854,13 @@ def test_undo_change_pending_home(bus, helper, polkit, snapper, runtime):
     polkit.allow('undo-change')
     call(bus, 'UndoChange', 'home', 3, 0, ['/home/nobody/a'])
     assert snapper.undone() == [['3..0', '0o600', '/home/nobody/a\n']]
+
+
+def test_rollback_mark_failed(bus, launch, polkit, runtime):
+    fail = ['def fail():', '    raise OSError("read-only")']
+    launch(extra=[*fail, 'layout.mark_pending = fail'])
+    polkit.allow('rollback')
+    assert call(bus, 'Rollback') == ({'mode': 'swap', 'backup': 3, 'kernel': ''},)
 
 
 def test_rollback_failed(bus, launch, polkit, runtime):
