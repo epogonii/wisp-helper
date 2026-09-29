@@ -226,7 +226,7 @@ def swap(top, plan):
     sub = plan.subvolume
     kept, fresh = f'{sub}.{plan.stamp}', f'{sub}.{plan.stamp}.new'
     snapshot = f'.snapshots/{plan.number}/snapshot'
-    backup = at(f'{sub}/.snapshots/{plan.backup}')
+    backup = f'{sub}/.snapshots/{plan.backup}'
     same(at(sub), '/')
     # btrfs would put the copy inside a directory that is already there.
     for name in (kept, fresh):
@@ -251,11 +251,11 @@ def swap(top, plan):
             (f'rmdir {fresh}/{path}', lambda path=path: os.rmdir(at(f'{fresh}/{path}')), None)
         )
     steps += [
-        (f'mkdir {backup}', lambda: os.mkdir(backup), lambda: os.rmdir(backup)),
+        (f'mkdir {backup}', lambda: os.mkdir(at(backup)), lambda: os.rmdir(at(backup))),
         (
             f'write {backup}/info.xml',
-            lambda: write(f'{backup}/info.xml', plan.info),
-            lambda: os.unlink(f'{backup}/info.xml'),
+            lambda: write(at(f'{backup}/info.xml'), plan.info),
+            lambda: os.unlink(at(f'{backup}/info.xml')),
         ),
     ]
     if plan.kernel:
@@ -270,7 +270,7 @@ def swap(top, plan):
         )
     renames = [(sub, kept), (fresh, sub)]
     renames += [(f'{kept}/{path}', f'{sub}/{path}') for path in plan.moved]
-    renames.append((kept, f'{sub}/.snapshots/{plan.backup}/snapshot'))
+    renames.append((kept, f'{backup}/snapshot'))
     for old, new in renames:
         steps.append(
             (
