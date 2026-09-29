@@ -45,7 +45,7 @@ class Refused(Exception):
         self.more = more
 
 
-# btrfs failed with the copy already made.
+# A step failed after making what its undo takes away.
 class Partial(Failed):
     pass
 
@@ -176,11 +176,17 @@ def copy(source, target):
         raise
 
 
+# Once the file is there, whatever fails leaves it for the undo. close()
+# tries a failed flush again, so it goes inside the try as well.
 def write(path, text):
-    with open(path, 'x', encoding='utf-8') as file:
-        file.write(text)
-        file.flush()
-        os.fsync(file.fileno())
+    file = open(path, 'x', encoding='utf-8')
+    try:
+        with file:
+            file.write(text)
+            file.flush()
+            os.fsync(file.fileno())
+    except OSError as error:
+        raise Partial(str(error)) from None
 
 
 # btrfs gives each subvolume a device number of its own.
@@ -286,7 +292,7 @@ def swap(top, plan):
         try:
             do()
         except Exception as error:
-            # What btrfs made before failing is deleted with the rest.
+            # What the step made before failing is undone with the rest.
             if isinstance(error, Partial):
                 done.append((name, undo))
             put_back(f'{name} failed: {error}', done)

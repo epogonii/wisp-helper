@@ -260,12 +260,12 @@ def test_version_key(version, key):
     assert [part for part in swap.version_key(version) if isinstance(part, int)] == key
 
 
-def fake_btrfs(tmp_path, monkeypatch, delete='/bin/rmdir "$3"'):
+def fake_btrfs(
+    tmp_path, monkeypatch, delete='/bin/rmdir "$3"', made='echo "ERROR: cannot sync" >&2; exit 1'
+):
     btrfs = tmp_path / 'btrfs'
     btrfs.write_text(
-        '#!/bin/sh\n'
-        'if [ "$2" = snapshot ]; then /bin/mkdir "$4"; echo "ERROR: cannot sync" >&2; exit 1; fi\n'
-        f'{delete}\n'
+        f'#!/bin/sh\nif [ "$2" = snapshot ]; then /bin/mkdir "$4"; {made}; fi\n{delete}\n'
     )
     btrfs.chmod(0o755)
     monkeypatch.setattr(swap, 'BTRFS', str(btrfs))
@@ -321,6 +321,28 @@ def test_swap_copy_failed(tmp_path, monkeypatch, delete, end, left):
     assert sorted(os.listdir(top)) == left
     assert os.listdir(top / 'root/.snapshots') == ['5']
     assert (tmp_path / 'grubby.log').read_text().splitlines() == ['--default-kernel']
+
+
+# The info.xml a full disk leaves goes back with the rest.
+def test_swap_write_failed(tmp_path, monkeypatch):
+    fake_btrfs(tmp_path, monkeypatch, made='exit 0')
+    monkeypatch.setattr(swap, 'same', lambda path, running: None)
+
+    def fsync(fd):
+        raise OSError(28, 'No space left on device')
+
+    monkeypatch.setattr(os, 'fsync', fsync)
+    top = tmp_path / 'top'
+    (top / 'root/.snapshots/5/snapshot').mkdir(parents=True)
+    found = swap.Plan('/dev/vda3', 'root', 5, 11, '', ['.snapshots'], [], '20260929-120005', INFO)
+    with pytest.raises(swap.Failed) as info:
+        swap.swap(str(top), found)
+    assert str(info.value) == (
+        'write root/.snapshots/11/info.xml failed: [Errno 28] No space left on device. '
+        'Everything was put back.'
+    )
+    assert sorted(os.listdir(top)) == ['root']
+    assert os.listdir(top / 'root/.snapshots') == ['5']
 
 
 # An undo that fails stops the rest, which is named.
