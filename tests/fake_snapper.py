@@ -57,12 +57,15 @@ def main(args):
         # A new config has only the running system, 0.
         numbers = state['snapshots'].get(config, [0])
         default, read_only = state.get('default', {}).get(config, [None, False])
+        active, active_read_only = state.get('active', {}).get(config, [None, False])
         descriptions = state.get('descriptions', {})
         rows = [
             {
                 'number': number,
+                'active': number == active,
                 'default': number == default,
-                'read-only': number == default and read_only,
+                'read-only': (number == default and read_only)
+                or (number == active and active_read_only),
                 'description': descriptions.get(str(number), ''),
             }
             for number in numbers

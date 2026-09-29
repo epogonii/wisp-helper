@@ -152,6 +152,31 @@ def test_missing(monkeypatch):
         snapper.configs()
 
 
+# Active is the snapshot running, default the one the next boot takes.
+@pytest.mark.parametrize(
+    'active, read_only, pending',
+    [(5, False, False), (4, False, True), (3, True, False), (None, False, False)],
+)
+def test_default_snapshot(fake, active, read_only, pending):
+    rows = [
+        {
+            'number': number,
+            'active': number == active,
+            'default': number == 5,
+            'read-only': number == active and read_only,
+        }
+        for number in (0, 3, 4, 5)
+    ]
+    fake(f"echo '{json.dumps({'root': rows})}'")
+    assert snapper.default_snapshot('root') == {**rows[3], 'pending': pending}
+
+
+def test_no_default_snapshot(fake):
+    rows = [{'number': 0, 'active': False, 'default': False, 'read-only': False}]
+    fake(f"echo '{json.dumps({'root': rows})}'")
+    assert snapper.default_snapshot('root') is None
+
+
 # A timeline snapshot may slip in next to the two rollback makes.
 def test_rollback(fake, tmp_path):
     before = {'root': [{'number': 0}, {'number': 5}]}

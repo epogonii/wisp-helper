@@ -95,16 +95,30 @@ def distro():
         return 'linux'
 
 
+RESTART = 'restart the computer to finish the rollback first'
+
+
 # Until the restart the running root is the one rolled back from, and what
 # an action writes to it would be gone after.
-def not_pending():
+def not_pending(configs=None):
     if layout.pending():
-        raise Pending('restart the computer to finish the rollback first')
+        raise Pending(RESTART)
+    try:
+        if configs is None:
+            configs = snapper.configs()
+        why = layout.rollback(configs, snapper.default_snapshot)[1]
+    except (Failed, Unsupported) as error:
+        # A root config snapper cannot list is no reason to refuse the rest.
+        log.warning('Cannot tell if a rollback waits for the restart: %s', error)
+        return
+    if why == 'pending':
+        raise Pending(RESTART)
 
 
 def rollback_mode(configs):
-    not_pending()
     mode, why = layout.rollback(configs, snapper.default_snapshot)
+    if why == 'pending':
+        raise Pending(RESTART)
     if mode == 'none':
         raise Unsupported(f'this system cannot roll back ({why})')
     return mode
@@ -274,15 +288,16 @@ class Service:
             'distro': GLib.Variant('s', distro()),
             'rollback': GLib.Variant('s', mode),
             'rollback_why': GLib.Variant('s', why),
-            'pending': GLib.Variant('b', pending),
+            'pending': GLib.Variant('b', pending or why == 'pending'),
             'maintenance': GLib.Variant('b', maintenance.find() is not None),
         }
         return GLib.Variant('(a{sv})', (info,))
 
     def GrantAccess(self, call, config):
-        not_pending()
+        configs = snapper.configs()
+        not_pending(configs)
         user = validate.user(call.uid)
-        validate.config(config, snapper.configs())
+        validate.config(config, configs)
 
         def work():
             values = snapper.allow_user(snapper.get_config(config), user)
@@ -292,9 +307,10 @@ class Service:
         return work
 
     def SetConfig(self, call, config, values):
-        not_pending()
+        configs = snapper.configs()
+        not_pending(configs)
         validate.settings(values)
-        validate.config(config, snapper.configs())
+        validate.config(config, configs)
         return lambda: snapper.set_config(config, values)
 
     def ListSubvolumes(self, call):
@@ -302,15 +318,16 @@ class Service:
         return GLib.Variant('(as)', (subvolumes,))
 
     def CreateConfig(self, call, config, subvolume):
-        not_pending()
         configs = snapper.configs()
+        not_pending(configs)
         validate.new_config(config, configs)
         validate.new_subvolume(subvolume, layout.subvolumes(configs.values()))
         return lambda: snapper.create_config(config, subvolume)
 
     def DeleteConfig(self, call, config):
-        not_pending()
-        validate.config(config, snapper.configs())
+        configs = snapper.configs()
+        not_pending(configs)
+        validate.config(config, configs)
         return lambda: snapper.delete_config(config)
 
     def UndoChange(self, call, config, first, last, paths):
@@ -318,7 +335,7 @@ class Service:
         validate.config(config, configs)
         # A rollback leaves the other subvolumes alone.
         if configs[config] == '/':
-            not_pending()
+            not_pending(configs)
         paths = validate.paths(paths, configs[config])
         validate.snapshots(first, last, snapper.numbers(config))
         return lambda: snapper.undo_change(config, first, last, paths)

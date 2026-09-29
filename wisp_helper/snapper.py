@@ -80,9 +80,17 @@ def numbers(config):
 
 
 # The snapshot btrfs mounts by default, or None when that is not one of config's.
+# After a rollback it is not the one running until the restart. A read-only
+# one picked from the boot menu is not waiting for a restart.
 def default_snapshot(config):
-    rows = read('-c', config, 'list', '--columns', 'number,default,read-only')[config]
-    return next((row for row in rows if row['default'] and row['number'] != 0), None)
+    rows = read('-c', config, 'list', '--columns', 'number,active,default,read-only')[config]
+    default = next((row for row in rows if row['default'] and row['number'] != 0), None)
+    active = next((row for row in rows if row['active'] and row['number'] != 0), None)
+    if default is not None:
+        default['pending'] = (
+            active is not None and active['number'] != default['number'] and not active['read-only']
+        )
+    return default
 
 
 # snapper keeps the running system as "rollback backup of #N" and makes a

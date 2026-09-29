@@ -161,6 +161,9 @@ def rollback(configs, default):
         if row['read-only']:
             return 'none', 'transactional'
         if not any(option.startswith(('subvol=', 'subvolid=')) for option in fstab):
+            # snapper rollback from a terminal leaves no mark.
+            if row['pending']:
+                return 'none', 'pending'
             return 'native', ''
     why = no_swap(root, table, fstab)
     if not why:

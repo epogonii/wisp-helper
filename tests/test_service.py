@@ -26,7 +26,7 @@ USER = pwd.getpwnam('nobody')
 LIST = ['--jsonout', 'list-configs']
 GET = ['--jsonout', '-c', 'root', 'get-config']
 NUMBERS = ['--jsonout', '-c', 'root', 'list', '--columns', 'number']
-DEFAULT = ['--jsonout', '-c', 'root', 'list', '--columns', 'number,default,read-only']
+DEFAULT = ['--jsonout', '-c', 'root', 'list', '--columns', 'number,active,default,read-only']
 
 CONFIGS = {
     'root': {'SUBVOLUME': '/', 'ALLOW_USERS': '', 'SYNC_ACL': 'no'},
@@ -149,11 +149,12 @@ class Snapper:
         self.path.chmod(0o755)
         self.set(CONFIGS)
 
-    def set(self, configs, fail=None, sleep=None, default=None):
+    def set(self, configs, fail=None, sleep=None, default=None, active=None):
         state = {
             'configs': configs,
             'snapshots': SNAPSHOTS,
             'default': default or {},
+            'active': active or {},
             'undone': [],
             'fail': fail or {},
             'sleep': sleep or {},
@@ -424,7 +425,7 @@ def test_grant_access(bus, helper, polkit, snapper):
     polkit.allow('grant-access')
     assert call(bus, 'GrantAccess') == ()
     set_config = ['-c', 'root', 'set-config', 'ALLOW_USERS=nobody', 'SYNC_ACL=yes']
-    assert snapper.calls() == [LIST, GET, set_config]
+    assert snapper.calls() == [LIST, DEFAULT, GET, set_config]
     assert snapper.configs()['root']['ALLOW_USERS'] == 'nobody'
 
 
@@ -432,18 +433,18 @@ def test_grant_access_again(bus, helper, polkit, snapper):
     snapper.set({'root': {'SUBVOLUME': '/', 'ALLOW_USERS': 'nobody', 'SYNC_ACL': 'yes'}})
     polkit.allow('grant-access')
     call(bus, 'GrantAccess')
-    assert snapper.calls() == [LIST, GET]
+    assert snapper.calls() == [LIST, DEFAULT, GET]
 
 
 def test_grant_access_unknown_config(bus, helper, polkit, snapper):
     assert refusal(bus, 'GrantAccess', 'srv') == 'Invalid'
     assert polkit.calls() == []
-    assert snapper.calls() == [LIST]
+    assert snapper.calls() == [LIST, DEFAULT]
 
 
 def test_grant_access_not_authorized(bus, helper, snapper):
     assert refusal(bus, 'GrantAccess') == 'NotAuthorized'
-    assert snapper.calls() == [LIST]
+    assert snapper.calls() == [LIST, DEFAULT]
 
 
 def test_grant_access_failed(bus, helper, polkit, snapper):
@@ -498,7 +499,7 @@ def test_set_config(bus, helper, polkit, snapper):
     polkit.allow('set-config')
     call(bus, 'SetConfig', 'home', {'NUMBER_LIMIT': '2-10', 'TIMELINE_CREATE': 'no'})
     set_config = ['-c', 'home', 'set-config', 'NUMBER_LIMIT=2-10', 'TIMELINE_CREATE=no']
-    assert snapper.calls() == [LIST, set_config]
+    assert snapper.calls() == [LIST, DEFAULT, set_config]
     assert snapper.configs()['home']['NUMBER_LIMIT'] == '2-10'
 
 
@@ -509,13 +510,13 @@ def test_set_config_invalid(bus, helper, polkit, snapper, values):
     polkit.allow('set-config')
     assert refusal(bus, 'SetConfig', 'root', values) == 'Invalid'
     assert polkit.calls() == []
-    assert snapper.calls() == []
+    assert snapper.calls() == [LIST, DEFAULT]
 
 
 def test_set_config_unknown_config(bus, helper, polkit, snapper):
     assert refusal(bus, 'SetConfig', 'srv', {'NUMBER_LIMIT': '10'}) == 'Invalid'
     assert polkit.calls() == []
-    assert snapper.calls() == [LIST]
+    assert snapper.calls() == [LIST, DEFAULT]
 
 
 def test_list_subvolumes(bus, helper, snapper):
@@ -526,7 +527,7 @@ def test_list_subvolumes(bus, helper, snapper):
 def test_create_config(bus, helper, polkit, snapper):
     polkit.allow('create-config')
     call(bus, 'CreateConfig')
-    assert snapper.calls() == [LIST, ['-c', 'srv', 'create-config', '/srv']]
+    assert snapper.calls() == [LIST, DEFAULT, ['-c', 'srv', 'create-config', '/srv']]
     assert snapper.configs()['srv']['SUBVOLUME'] == '/srv'
     assert request(bus, NAME, PATH, NAME, 'ListSubvolumes', reply='(as)') == ([],)
 
@@ -547,13 +548,13 @@ def test_create_config_invalid(bus, helper, polkit, snapper, config, subvolume):
     polkit.allow('create-config')
     assert refusal(bus, 'CreateConfig', config, subvolume) == 'Invalid'
     assert polkit.calls() == []
-    assert snapper.calls() == [LIST]
+    assert snapper.calls() == [LIST, DEFAULT]
 
 
 def test_delete_config(bus, helper, polkit, snapper):
     polkit.allow('delete-config')
     call(bus, 'DeleteConfig')
-    assert snapper.calls() == [LIST, ['-c', 'home', 'delete-config']]
+    assert snapper.calls() == [LIST, DEFAULT, ['-c', 'home', 'delete-config']]
     assert snapper.configs().keys() == {'root'}
 
 
@@ -588,9 +589,9 @@ def test_undo_change(bus, helper, polkit, snapper, runtime):
         (('home', 3, 0, []), [LIST]),
         (('home', 3, 0, ['/home/nobody/a\\b']), [LIST]),
         (('home', 3, 0, ['/home/nobody/\\x0a/etc/shadow']), [LIST]),
-        (('root', 0, 1, ['/etc/hostname']), [LIST, NUMBERS]),
-        (('root', 2, 2, ['/etc/hostname']), [LIST, NUMBERS]),
-        (('root', 3, 0, ['/etc/hostname']), [LIST, NUMBERS]),
+        (('root', 0, 1, ['/etc/hostname']), [LIST, DEFAULT, NUMBERS]),
+        (('root', 2, 2, ['/etc/hostname']), [LIST, DEFAULT, NUMBERS]),
+        (('root', 3, 0, ['/etc/hostname']), [LIST, DEFAULT, NUMBERS]),
     ],
 )
 def test_undo_change_invalid(bus, helper, polkit, snapper, args, calls):
@@ -602,7 +603,7 @@ def test_undo_change_invalid(bus, helper, polkit, snapper, args, calls):
 
 def test_undo_change_not_authorized(bus, helper, snapper, runtime):
     assert refusal(bus, 'UndoChange') == 'NotAuthorized'
-    assert snapper.calls() == [LIST, NUMBERS]
+    assert snapper.calls() == [LIST, DEFAULT, NUMBERS]
     assert list(runtime.iterdir()) == []
 
 
@@ -622,7 +623,7 @@ def test_set_maintenance(bus, helper, polkit, snapper, systemctl, maintenance):
     text = MAINTENANCE.replace('"monthly"', '"weekly"') + 'BTRFS_TRIM_PERIOD="none"\n'
     assert maintenance.read_text() == text
     assert systemctl.calls() == [REFRESH]
-    assert snapper.calls() == []
+    assert snapper.calls() == [LIST, DEFAULT]
 
 
 @pytest.mark.parametrize(
@@ -778,11 +779,11 @@ def test_stop_during_polkit_check(bus, helper, polkit, snapper):
         None,
     )
     # By now polkit is asked. The mock answers after its sleep.
-    time.sleep(0.5)
+    time.sleep(1)
     helper.terminate()
     assert helper.wait(timeout=2) == 0
     assert len(polkit.calls()) == 1
-    assert snapper.calls() == [LIST]
+    assert snapper.calls() == [LIST, DEFAULT]
 
 
 def test_stop_idle(helper):
@@ -854,6 +855,37 @@ def test_undo_change_pending_home(bus, helper, polkit, snapper, runtime):
     polkit.allow('undo-change')
     call(bus, 'UndoChange', 'home', 3, 0, ['/home/nobody/a'])
     assert snapper.undone() == [['3..0', '0o600', '/home/nobody/a\n']]
+
+
+# After snapper rollback from a terminal there is no mark, but the snapshot
+# running is not the default.
+@pytest.mark.parametrize('method', ACTIONS)
+def test_pending_native(bus, helper, polkit, snapper, tmp_path, method):
+    snapper.set(CONFIGS, default={'root': [2, False]}, active={'root': [1, False]})
+    (tmp_path / 'fstab').write_text('UUID=1b2c / btrfs defaults 0 0\n')
+    assert refusal(bus, method) == 'Pending'
+    assert polkit.calls() == []
+
+
+def test_info_pending_native(bus, helper, snapper, tmp_path):
+    snapper.set(CONFIGS, default={'root': [2, False]}, active={'root': [1, False]})
+    (tmp_path / 'fstab').write_text('UUID=1b2c / btrfs defaults 0 0\n')
+    assert info(bus)['pending'] is True
+    assert rollback(bus) == ('none', 'pending')
+    assert plan_rollback(bus)['refused'] == 'pending'
+    # A read-only snapshot picked from the boot menu is not waiting for anything.
+    snapper.set(CONFIGS, default={'root': [2, False]}, active={'root': [1, True]})
+    assert info(bus)['pending'] is False
+    assert rollback(bus) == ('native', '')
+
+
+# The config of / is no reason to refuse one of another.
+def test_pending_unknown(bus, helper, polkit, snapper):
+    snapper.set(CONFIGS, fail={'list': 'Failure (error.io).'})
+    polkit.allow('grant-access')
+    assert call(bus, 'GrantAccess', 'home') == ()
+    assert snapper.calls()[:2] == [LIST, DEFAULT]
+    assert snapper.configs()['home']['ALLOW_USERS'] == 'nobody'
 
 
 def test_rollback_mark_failed(bus, launch, polkit, runtime):
