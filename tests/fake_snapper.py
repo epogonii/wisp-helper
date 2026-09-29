@@ -57,7 +57,8 @@ def main(args):
         # A new config has only the running system, 0.
         numbers = state['snapshots'].get(config, [0])
         default, read_only = state.get('default', {}).get(config, [None, False])
-        active, active_read_only = state.get('active', {}).get(config, [None, False])
+        # Booted as usual, the default is the one running.
+        active, active_read_only = state.get('active', {}).get(config, [default, False])
         descriptions = state.get('descriptions', {})
         rows = [
             {
@@ -81,6 +82,9 @@ def main(args):
             str(backup): 'rollback backup of #1',
             str(copy): f'writable copy of #{number}',
         }
+        # What runs stays until the restart.
+        running = state.get('default', {}).get(config, [None, False])
+        state.setdefault('active', {}).setdefault(config, running)
         state['default'] = {config: [copy, False]}
     elif command == 'undochange' and rest[0] == '-i':
         # The helper deletes the list afterwards, so what it held is kept here.

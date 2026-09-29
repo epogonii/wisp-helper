@@ -155,7 +155,7 @@ def test_missing(monkeypatch):
 # Active is the snapshot running, default the one the next boot takes.
 @pytest.mark.parametrize(
     'active, read_only, pending',
-    [(5, False, False), (4, False, True), (3, True, False), (None, False, False)],
+    [(5, False, False), (4, False, True), (3, True, False), (None, False, True)],
 )
 def test_default_snapshot(fake, active, read_only, pending):
     rows = [

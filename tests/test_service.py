@@ -884,6 +884,9 @@ def test_info_pending_native(bus, helper, snapper, tmp_path):
     snapper.set(CONFIGS, default={'root': [2, False]}, active={'root': [1, True]})
     assert info(bus)['pending'] is False
     assert rollback(bus) == ('native', '')
+    # A root like @ is no snapshot, so none is running.
+    snapper.set(CONFIGS, default={'root': [2, False]}, active={'root': [None, False]})
+    assert info(bus)['pending'] is True
 
 
 # The config of / is no reason to refuse one of another.
