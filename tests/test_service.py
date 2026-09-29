@@ -679,7 +679,7 @@ def plan_rollback(bus, config='root', number=2):
 
 def test_plan_rollback(bus, helper, polkit, snapper):
     assert plan_rollback(bus) == {'mode': 'swap', 'backup': 3, 'kernel': '', 'refused': ''}
-    assert snapper.calls() == [LIST, NUMBERS, DEFAULT]
+    assert snapper.calls() == [LIST, DEFAULT, NUMBERS]
     assert polkit.calls() == []
 
 
@@ -698,8 +698,10 @@ def test_plan_rollback_native(bus, helper, snapper, tmp_path):
     assert plan_rollback(bus) == {'mode': 'native', 'backup': 0, 'kernel': '', 'refused': ''}
 
 
-def test_plan_rollback_pending(bus, helper, runtime):
+# After a swap snapper cannot open /.snapshots until the restart.
+def test_plan_rollback_pending(bus, helper, snapper, runtime):
     (runtime / 'rollback-pending').touch()
+    snapper.set(CONFIGS, fail={'list': 'Failure (error.io).'})
     assert plan_rollback(bus)['refused'] == 'pending'
 
 
@@ -791,6 +793,14 @@ def test_rollback_not_authorized(bus, helper, tmp_path, runtime):
     assert refusal(bus, 'Rollback') == 'NotAuthorized'
     assert not (tmp_path / 'executed').exists()
     assert not (runtime / 'rollback-pending').exists()
+
+
+def test_rollback_pending(bus, helper, polkit, snapper, runtime):
+    (runtime / 'rollback-pending').touch()
+    snapper.set(CONFIGS, fail={'list': 'Failure (error.io).'})
+    polkit.allow('rollback')
+    assert refusal(bus, 'Rollback') == 'Pending'
+    assert polkit.calls() == []
 
 
 def test_rollback_failed(bus, launch, polkit, runtime):

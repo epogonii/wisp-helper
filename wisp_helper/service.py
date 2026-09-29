@@ -311,8 +311,10 @@ class Service:
     def PlanRollback(self, call, config, number):
         configs = snapper.configs()
         validate.root_config(config, configs)
-        validate.rollback_snapshot(number, snapper.numbers(config))
         mode, why = layout.rollback(configs, snapper.default_snapshot)
+        # After a swap /.snapshots is gone until the restart.
+        if why != 'pending':
+            validate.rollback_snapshot(number, snapper.numbers(config))
         backup, kernel = 0, ''
         if mode == 'swap':
             try:
@@ -331,8 +333,9 @@ class Service:
     def Rollback(self, call, config, number):
         configs = snapper.configs()
         validate.root_config(config, configs)
-        validate.rollback_snapshot(number, snapper.numbers(config))
+        # Pending before snapper is asked for the snapshots, see PlanRollback.
         mode = rollback_mode(configs)
+        validate.rollback_snapshot(number, snapper.numbers(config))
         if mode == 'swap':
             swap_plan(number)
 
