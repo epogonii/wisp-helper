@@ -157,6 +157,7 @@ class Service:
     def __init__(self, quit):
         self.quit = quit
         self.busy = False
+        self.working = False
         self.stopping = False
         self.jobs = 0
         self.timer = 0
@@ -235,21 +236,22 @@ class Service:
 
     def authorized(self, call, work, allowed):
         if allowed:
+            self.working = True
             self.later(self.worker, work, lambda result: self.finish(call, result))
         else:
             self.finish(call, NotAuthorized('not authorized'))
 
     def finish(self, call, result):
-        self.busy = False
+        self.busy = self.working = False
         self.restart_timer()
         call.done(result)
         if self.stopping:
             self.quit()
 
     # systemd stops the helper with SIGTERM. A rollback or undochange is not
-    # left halfway for that.
+    # left halfway for that, but nothing starts after it either.
     def stop(self):
-        if self.busy:
+        if self.working:
             log.info('Stopping once the action is done')
             self.stopping = True
         else:

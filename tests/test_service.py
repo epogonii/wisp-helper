@@ -742,6 +742,30 @@ def test_stop_after_action(bus, helper, polkit, snapper):
     assert snapper.undone() != []
 
 
+# Nothing was started, so there is nothing to wait for.
+def test_stop_during_polkit_check(bus, helper, polkit, snapper):
+    polkit.allow('set-config', delay=3)
+    signature, args = ACTIONS['SetConfig']
+    bus.call(
+        NAME,
+        PATH,
+        NAME,
+        'SetConfig',
+        GLib.Variant(signature, args),
+        None,
+        Gio.DBusCallFlags.NONE,
+        10000,
+        None,
+        None,
+    )
+    # By now polkit is asked. The mock answers after its sleep.
+    time.sleep(0.5)
+    helper.terminate()
+    assert helper.wait(timeout=2) == 0
+    assert len(polkit.calls()) == 1
+    assert snapper.calls() == [LIST]
+
+
 def test_stop_idle(helper):
     helper.terminate()
     assert helper.wait(timeout=5) == 0
