@@ -79,6 +79,12 @@ def numbers(config):
     return {row['number'] for row in read('-c', config, 'list', '--columns', 'number')[config]}
 
 
+# The snapshot btrfs mounts by default, or None when that is not one of config's.
+def default_snapshot(config):
+    rows = read('-c', config, 'list', '--columns', 'number,default,read-only')[config]
+    return next((row for row in rows if row['default'] and row['number'] != 0), None)
+
+
 def undo_change(config, first, last, paths):
     with tempfile.NamedTemporaryFile(dir=RUNTIME_DIR) as file:
         file.write(b''.join(path + b'\n' for path in paths))

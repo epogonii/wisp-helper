@@ -25,7 +25,6 @@ def main(args):
     with CALLS.open('a') as file:
         print(json.dumps(args), file=file)
     state = json.loads(STATE.read_text())
-    time.sleep(state.get('sleep', 0))
     configs = state['configs']
     jsonout = args[0] == '--jsonout'
     if jsonout:
@@ -34,6 +33,7 @@ def main(args):
     if args[0] == '-c':
         config, args = args[1], args[2:]
     command, *rest = args
+    time.sleep(state.get('sleep', {}).get(command, 0))
     if command in state.get('fail', {}):
         fail(state['fail'][command])
 
@@ -56,7 +56,16 @@ def main(args):
     elif command == 'list' and jsonout:
         # A new config has only the running system, 0.
         numbers = state['snapshots'].get(config, [0])
-        print(json.dumps({config: [{'number': number} for number in numbers]}))
+        default, read_only = state.get('default', {}).get(config, [None, False])
+        rows = [
+            {
+                'number': number,
+                'default': number == default,
+                'read-only': number == default and read_only,
+            }
+            for number in numbers
+        ]
+        print(json.dumps({config: rows}))
     elif command == 'undochange' and rest[0] == '-i':
         # The helper deletes the list afterwards, so what it held is kept here.
         path = Path(rest[1])

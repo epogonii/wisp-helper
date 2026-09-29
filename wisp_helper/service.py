@@ -215,9 +215,18 @@ class Service:
         call.done(result)
 
     def GetInfo(self, call):
+        pending = layout.pending()
+        try:
+            mode, why = layout.rollback(snapper.configs(), snapper.default_snapshot)
+        except Unsupported:
+            # No snapper, so no config for / either.
+            mode, why = 'none', 'no-root-config'
         info = {
             'version': GLib.Variant('s', VERSION),
             'distro': GLib.Variant('s', distro()),
+            'rollback': GLib.Variant('s', mode),
+            'rollback_why': GLib.Variant('s', why),
+            'pending': GLib.Variant('b', pending),
             'maintenance': GLib.Variant('b', maintenance.find() is not None),
         }
         return GLib.Variant('(a{sv})', (info,))

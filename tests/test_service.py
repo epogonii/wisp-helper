@@ -26,6 +26,7 @@ USER = pwd.getpwnam('nobody')
 LIST = ['--jsonout', 'list-configs']
 GET = ['--jsonout', '-c', 'root', 'get-config']
 NUMBERS = ['--jsonout', '-c', 'root', 'list', '--columns', 'number']
+DEFAULT = ['--jsonout', '-c', 'root', 'list', '--columns', 'number,default,read-only']
 
 CONFIGS = {
     'root': {'SUBVOLUME': '/', 'ALLOW_USERS': '', 'SYNC_ACL': 'no'},
@@ -40,6 +41,9 @@ BTRFS_SCRUB_PERIOD="monthly"
 BTRFS_SCRUB_MOUNTPOINTS="/"
 """
 REFRESH = ['start', 'btrfsmaintenance-refresh.service']
+
+CMDLINE = 'BOOT_IMAGE=(hd0,gpt2)/vmlinuz-6.17.1 root=UUID=1b2c ro rootflags=subvol=root quiet\n'
+FSTAB = 'UUID=1b2c / btrfs subvol=root,compress=zstd:1 0 0\n'
 
 # /srv is the one subvolume left without a config.
 MOUNTINFO = """\
@@ -141,13 +145,14 @@ class Snapper:
         self.path.chmod(0o755)
         self.set(CONFIGS)
 
-    def set(self, configs, fail=None, sleep=0):
+    def set(self, configs, fail=None, sleep=None, default=None):
         state = {
             'configs': configs,
             'snapshots': SNAPSHOTS,
+            'default': default or {},
             'undone': [],
             'fail': fail or {},
-            'sleep': sleep,
+            'sleep': sleep or {},
         }
         self.path.with_name('state.json').write_text(json.dumps(state))
 
@@ -247,6 +252,8 @@ def launch(address, bus, polkit, snapper, runtime, systemctl, maintenance, tmp_p
     processes = []
     mountinfo = tmp_path / 'mountinfo'
     mountinfo.write_text(MOUNTINFO)
+    (tmp_path / 'cmdline').write_text(CMDLINE)
+    (tmp_path / 'fstab').write_text(FSTAB)
 
     def launch(uid=USER.pw_uid, idle=None, extra=()):
         code = [
@@ -254,6 +261,10 @@ def launch(address, bus, polkit, snapper, runtime, systemctl, maintenance, tmp_p
             f'snapper.SNAPPER = {str(snapper.path)!r}',
             f'snapper.RUNTIME_DIR = {str(runtime)!r}',
             f'layout.MOUNTINFO = {str(mountinfo)!r}',
+            f'layout.CMDLINE = {str(tmp_path / "cmdline")!r}',
+            f'layout.FSTAB = {str(tmp_path / "fstab")!r}',
+            f'layout.PENDING = {str(runtime / "rollback-pending")!r}',
+            'layout.inode = lambda path: {"/.snapshots": 256}.get(path, 0)',
             f'maintenance.PATHS = ({str(maintenance)!r},)',
             f'maintenance.SYSTEMCTL = {str(systemctl.path)!r}',
         ]
@@ -284,15 +295,56 @@ def test_version(bus, helper):
     assert request(bus, NAME, PATH, properties, 'Get', args, '(v)') == (1,)
 
 
-def test_info(bus, helper, maintenance):
+def info(bus):
     (info,) = request(bus, NAME, PATH, NAME, 'GetInfo')
-    assert info.keys() == {'version', 'distro', 'maintenance'}
-    assert info['version'] == VERSION
-    assert info['distro']
-    assert info['maintenance'] is True
+    return info
+
+
+def test_info(bus, helper, maintenance, snapper):
+    assert info(bus) == {
+        'version': VERSION,
+        'distro': info(bus)['distro'],
+        'rollback': 'swap',
+        'rollback_why': '',
+        'pending': False,
+        'maintenance': True,
+    }
+    assert info(bus)['distro']
+    assert snapper.calls()[:2] == [LIST, DEFAULT]
     maintenance.unlink()
-    (info,) = request(bus, NAME, PATH, NAME, 'GetInfo')
-    assert info['maintenance'] is False
+    assert info(bus)['maintenance'] is False
+
+
+def rollback(bus):
+    found = info(bus)
+    return found['rollback'], found['rollback_why']
+
+
+def test_info_native(bus, helper, snapper, tmp_path):
+    snapper.set(CONFIGS, default={'root': [2, False]})
+    assert rollback(bus) == ('none', 'fstab')
+    (tmp_path / 'fstab').write_text('UUID=1b2c / btrfs defaults 0 0\n')
+    assert rollback(bus) == ('native', '')
+    snapper.set(CONFIGS, default={'root': [2, True]})
+    assert rollback(bus) == ('none', 'transactional')
+
+
+def test_info_pending(bus, helper, runtime):
+    (runtime / 'rollback-pending').touch()
+    assert info(bus)['pending'] is True
+    assert rollback(bus) == ('none', 'pending')
+
+
+def test_info_no_root_config(bus, helper, snapper):
+    snapper.set({'home': CONFIGS['home']})
+    assert rollback(bus) == ('none', 'no-root-config')
+    assert snapper.calls() == [LIST]
+
+
+def test_info_no_snapper(bus, launch):
+    launch(extra=['snapper.SNAPPER = None'])
+    assert rollback(bus) == ('none', 'no-root-config')
+    assert info(bus)['version'] == VERSION
 
 
 @pytest.mark.parametrize('method', ACTIONS)
@@ -399,7 +451,8 @@ def test_caller(bus, launch, polkit, snapper):
 
 
 def test_answers_while_snapper_runs(bus, helper, polkit, snapper):
-    snapper.set(CONFIGS, sleep=2)
+    snapper.set(CONFIGS, sleep={'get-config': 2})
+    polkit.allow('grant-access')
     signature, args = ACTIONS['GrantAccess']
     results = []
     bus.call(
@@ -414,15 +467,15 @@ def test_answers_while_snapper_runs(bus, helper, polkit, snapper):
         None,
         lambda bus, result: results.append(result),
     )
+    # By now it waits for get-config.
+    time.sleep(0.5)
     started = time.monotonic()
-    (info,) = request(bus, NAME, PATH, NAME, 'GetInfo')
-    assert info['version'] == VERSION
+    assert info(bus)['version'] == VERSION
     assert time.monotonic() - started < 1
     assert refusal(bus, 'SetConfig') == 'Busy'
     while not results:
         GLib.MainContext.default().iteration(True)
-    with pytest.raises(GLib.Error):
-        bus.call_finish(results[0])
+    bus.call_finish(results[0])
 
 
 def test_set_config(bus, helper, polkit, snapper):

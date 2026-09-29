@@ -65,3 +65,131 @@ def test_subvolumes(mountinfo, text, taken, found):
 
 def test_unescape():
     assert layout.unescape(rb'/a\040b\011c\012d\134e\054f') == b'/a b\tc\nd\\e,f'
+
+
+FEDORA_CMDLINE = (
+    'BOOT_IMAGE=(hd0,gpt2)/vmlinuz-6.17.1 root=UUID=1b2c ro rootflags=subvol=root rhgb quiet'
+)
+FEDORA_FSTAB = """\
+# /etc/fstab
+UUID=1b2c /     btrfs subvol=root,compress=zstd:1 0 0
+UUID=9f00 /boot ext4  defaults                    1 2
+UUID=1b2c /home btrfs subvol=home,compress=zstd:1 0 0
+"""
+OPENSUSE_FSTAB = (
+    'UUID=77aa / btrfs defaults 0 0\nUUID=77aa /.snapshots btrfs subvol=/@/.snapshots 0 0\n'
+)
+CONFIGS = {'root': '/', 'home': '/home'}
+DEFAULT = {'number': 1, 'default': True, 'read-only': False}
+
+# After a swap: the root the machine runs from was renamed into the new one's .snapshots.
+SWAPPED = FEDORA.replace(b'/root / rw', b'/root/.snapshots/26/snapshot / rw', 1)
+ARCH = rb"""
+30 1 0:25 /@ / rw,relatime shared:1 - btrfs /dev/sda2 rw,subvolid=256,subvol=/@
+31 30 0:25 /@snapshots /.snapshots rw,relatime shared:2 - btrfs /dev/sda2 rw,subvolid=258,subvol=/@snapshots
+"""  # noqa: E501
+TOP = rb"""
+30 1 0:25 / / rw,relatime shared:1 - btrfs /dev/sda2 rw,subvolid=5,subvol=/
+"""
+EXT4 = rb"""
+30 1 8:2 / / rw,relatime shared:1 - ext4 /dev/sda2 rw
+"""
+
+
+@pytest.fixture
+def system(tmp_path, monkeypatch, mountinfo):
+    cmdline, fstab = tmp_path / 'cmdline', tmp_path / 'fstab'
+    monkeypatch.setattr(layout, 'CMDLINE', str(cmdline))
+    monkeypatch.setattr(layout, 'FSTAB', str(fstab))
+    monkeypatch.setattr(layout, 'PENDING', str(tmp_path / 'rollback-pending'))
+    inodes = {'/.snapshots': 256}
+    monkeypatch.setattr(layout, 'inode', lambda path: inodes.get(path, 0))
+
+    def system(text=FEDORA, flags=FEDORA_CMDLINE, table=FEDORA_FSTAB):
+        mountinfo(text)
+        cmdline.write_text(flags + '\n')
+        fstab.write_text(table)
+        return inodes
+
+    return system
+
+
+def rollback(configs=CONFIGS, row=None):
+    return layout.rollback(configs, lambda config: row)
+
+
+def test_swap(system):
+    system()
+    assert rollback() == ('swap', '')
+    assert not layout.pending()
+    system(flags=FEDORA_CMDLINE.replace('subvol=root', 'subvol=/root'))
+    assert rollback() == ('swap', '')
+
+
+@pytest.mark.parametrize(
+    'text, flags, table, why',
+    [
+        (
+            FEDORA,
+            FEDORA_CMDLINE.replace('subvol=root', 'subvol=root,subvolid=287'),
+            FEDORA_FSTAB,
+            'by-id',
+        ),
+        (FEDORA, FEDORA_CMDLINE, FEDORA_FSTAB.replace('subvol=root', 'subvolid=287'), 'by-id'),
+        (FEDORA, FEDORA_CMDLINE.replace(' rootflags=subvol=root', ''), FEDORA_FSTAB, 'cmdline'),
+        (FEDORA, FEDORA_CMDLINE.replace('subvol=root', 'compress=zstd'), FEDORA_FSTAB, 'cmdline'),
+        (TOP, 'root=/dev/sda2', '', 'top-level'),
+        (EXT4, 'root=/dev/sda2', '', 'not-btrfs'),
+        (ARCH, 'root=/dev/sda2 rootflags=subvol=@', '', 'snapshots-mounted'),
+    ],
+)
+def test_no_swap(system, text, flags, table, why):
+    system(text, flags, table)
+    assert rollback() == ('none', why)
+
+
+# Missing, or the stand-in a snapshot has for it.
+@pytest.mark.parametrize('number', [0, 2])
+def test_snapshots_missing(system, number):
+    system()['/.snapshots'] = number
+    assert rollback() == ('none', 'snapshots-missing')
+
+
+def test_no_root_config(system):
+    system()
+
+    def default(config):
+        raise AssertionError(config)
+
+    assert layout.rollback({'home': '/home'}, default) == ('none', 'no-root-config')
+
+
+def test_native(system):
+    system(OPENSUSE, 'root=UUID=77aa splash=silent', OPENSUSE_FSTAB)
+    assert rollback(row=DEFAULT) == ('native', '')
+    # Booted from a read-only snapshot out of the boot menu.
+    system(OPENSUSE, 'root=UUID=77aa rootflags=subvol=@/.snapshots/1/snapshot', OPENSUSE_FSTAB)
+    assert rollback(row=DEFAULT) == ('native', '')
+
+
+def test_no_native(system):
+    system(OPENSUSE, 'root=UUID=77aa', OPENSUSE_FSTAB)
+    assert rollback(row={**DEFAULT, 'read-only': True}) == ('none', 'transactional')
+    system(OPENSUSE, 'root=UUID=77aa', 'UUID=77aa / btrfs subvol=@/.snapshots/1/snapshot 0 0\n')
+    assert rollback(row=DEFAULT) == ('none', 'fstab')
+
+
+def test_pending(system, tmp_path):
+    system(SWAPPED)
+    assert layout.pending()
+    assert rollback() == ('none', 'pending')
+    system()
+    (tmp_path / 'rollback-pending').touch()
+    assert layout.pending()
+    assert rollback(row=DEFAULT) == ('none', 'pending')
+
+
+def test_no_files(system, tmp_path):
+    system()
+    (tmp_path / 'fstab').unlink()
+    assert rollback() == ('swap', '')
