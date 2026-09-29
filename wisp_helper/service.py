@@ -95,10 +95,16 @@ def distro():
         return 'linux'
 
 
-def rollback_mode(configs):
-    mode, why = layout.rollback(configs, snapper.default_snapshot)
-    if why == 'pending':
+# Until the restart the running root is the one rolled back from, and what
+# an action writes to it would be gone after.
+def not_pending():
+    if layout.pending():
         raise Pending('restart the computer to finish the rollback first')
+
+
+def rollback_mode(configs):
+    not_pending()
+    mode, why = layout.rollback(configs, snapper.default_snapshot)
     if mode == 'none':
         raise Unsupported(f'this system cannot roll back ({why})')
     return mode
@@ -272,6 +278,7 @@ class Service:
         return GLib.Variant('(a{sv})', (info,))
 
     def GrantAccess(self, call, config):
+        not_pending()
         user = validate.user(call.uid)
         validate.config(config, snapper.configs())
 
@@ -283,6 +290,7 @@ class Service:
         return work
 
     def SetConfig(self, call, config, values):
+        not_pending()
         validate.settings(values)
         validate.config(config, snapper.configs())
         return lambda: snapper.set_config(config, values)
@@ -292,18 +300,23 @@ class Service:
         return GLib.Variant('(as)', (subvolumes,))
 
     def CreateConfig(self, call, config, subvolume):
+        not_pending()
         configs = snapper.configs()
         validate.new_config(config, configs)
         validate.new_subvolume(subvolume, layout.subvolumes(configs.values()))
         return lambda: snapper.create_config(config, subvolume)
 
     def DeleteConfig(self, call, config):
+        not_pending()
         validate.config(config, snapper.configs())
         return lambda: snapper.delete_config(config)
 
     def UndoChange(self, call, config, first, last, paths):
         configs = snapper.configs()
         validate.config(config, configs)
+        # A rollback leaves the other subvolumes alone.
+        if configs[config] == '/':
+            not_pending()
         paths = validate.paths(paths, configs[config])
         validate.snapshots(first, last, snapper.numbers(config))
         return lambda: snapper.undo_change(config, first, last, paths)
@@ -364,6 +377,7 @@ class Service:
         return work
 
     def SetMaintenance(self, call, values):
+        not_pending()
         validate.periods(values)
         path = maintenance.find()
         if path is None:

@@ -370,8 +370,8 @@ def test_not_authorized(bus, helper, method):
 
 def test_authorized(bus, helper, polkit):
     polkit.allow('rollback')
-    assert call(bus, 'Rollback')[0]['mode'] == 'swap'
     assert refusal(bus, 'SetMaintenance') == 'NotAuthorized'
+    assert call(bus, 'Rollback')[0]['mode'] == 'swap'
 
 
 def test_polkit_request(bus, helper, polkit):
@@ -795,12 +795,22 @@ def test_rollback_not_authorized(bus, helper, tmp_path, runtime):
     assert not (runtime / 'rollback-pending').exists()
 
 
-def test_rollback_pending(bus, helper, polkit, snapper, runtime):
+# What they write would stay in the root rolled back from, and after a swap
+# snapper cannot open /.snapshots.
+@pytest.mark.parametrize('method', ACTIONS)
+def test_pending(bus, helper, polkit, snapper, runtime, method):
     (runtime / 'rollback-pending').touch()
     snapper.set(CONFIGS, fail={'list': 'Failure (error.io).'})
-    polkit.allow('rollback')
-    assert refusal(bus, 'Rollback') == 'Pending'
+    assert refusal(bus, method) == 'Pending'
     assert polkit.calls() == []
+    assert snapper.calls() in ([], [LIST])
+
+
+def test_undo_change_pending_home(bus, helper, polkit, snapper, runtime):
+    (runtime / 'rollback-pending').touch()
+    polkit.allow('undo-change')
+    call(bus, 'UndoChange', 'home', 3, 0, ['/home/nobody/a'])
+    assert snapper.undone() == [['3..0', '0o600', '/home/nobody/a\n']]
 
 
 def test_rollback_failed(bus, launch, polkit, runtime):
