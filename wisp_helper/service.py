@@ -254,3 +254,17 @@ class Service:
         validate.paths(paths, configs[config])
         validate.snapshots(first, last, snapper.numbers(config))
         return lambda: snapper.undo_change(config, first, last, paths)
+
+    def SetMaintenance(self, call, values):
+        validate.periods(values)
+        path = maintenance.find()
+        if path is None:
+            raise Unsupported('btrfsmaintenance is not installed')
+        if maintenance.SYSTEMCTL is None:
+            raise Unsupported('systemctl is not installed')
+
+        def work():
+            maintenance.set_values(path, values)
+            maintenance.refresh()
+
+        return work

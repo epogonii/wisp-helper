@@ -27,6 +27,10 @@ LIMITS = {
 # A number, or a range like 2-10 that snapper narrows as the disk fills up.
 LIMIT = re.compile(r'([0-9]{1,6})(?:-([0-9]{1,6}))?')
 
+# btrfsmaintenance's jobs. Its file is sourced by a root shell, so only these words go in.
+JOBS = {'BTRFS_BALANCE_PERIOD', 'BTRFS_SCRUB_PERIOD', 'BTRFS_DEFRAG_PERIOD', 'BTRFS_TRIM_PERIOD'}
+PERIODS = {'none', 'daily', 'weekly', 'monthly'}
+
 
 def user(uid):
     if uid == 0:
@@ -73,6 +77,17 @@ def settings(values):
         else:
             raise Invalid(f'cannot change {key}')
         if not good:
+            raise Invalid(f'{key} cannot be {value!r}')
+    return values
+
+
+def periods(values):
+    if not values:
+        raise Invalid('nothing to change')
+    for key, value in values.items():
+        if key not in JOBS:
+            raise Invalid(f'cannot change {key}')
+        if value not in PERIODS:
             raise Invalid(f'{key} cannot be {value!r}')
     return values
 

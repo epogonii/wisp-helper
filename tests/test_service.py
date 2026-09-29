@@ -33,6 +33,14 @@ CONFIGS = {
 }
 SNAPSHOTS = {'root': [0, 1, 2], 'home': [0, 3]}
 
+# Bits of the file btrfsmaintenance ships.
+MAINTENANCE = """\
+## Type:        string(none,daily,weekly,monthly)
+BTRFS_SCRUB_PERIOD="monthly"
+BTRFS_SCRUB_MOUNTPOINTS="/"
+"""
+REFRESH = ['start', 'btrfsmaintenance-refresh.service']
+
 # /srv is the one subvolume left without a config.
 MOUNTINFO = """\
 609 1 0:36 /root / rw,relatime shared:1 - btrfs /dev/vda3 rw,seclabel,subvolid=287,subvol=/root
@@ -158,6 +166,24 @@ class Snapper:
         return [json.loads(line) for line in lines]
 
 
+class Systemctl:
+    def __init__(self, path):
+        self.path = path / 'systemctl'
+        self.set()
+
+    def set(self, fail=None):
+        script = f'#!/bin/sh\necho "$@" >> "{self.path}.log"\n'
+        if fail:
+            script += f'echo "{fail}" >&2\nexit 5\n'
+        self.path.write_text(script)
+        self.path.chmod(0o755)
+
+    def calls(self):
+        path = self.path.with_name('systemctl.log')
+        lines = path.read_text().splitlines() if path.exists() else []
+        return [line.split() for line in lines]
+
+
 @pytest.fixture(scope='module')
 def address():
     daemon = subprocess.Popen(
@@ -205,22 +231,37 @@ def runtime(tmp_path):
 
 
 @pytest.fixture
-def launch(address, bus, polkit, snapper, runtime, tmp_path):
+def systemctl(tmp_path):
+    return Systemctl(tmp_path)
+
+
+@pytest.fixture
+def maintenance(tmp_path):
+    path = tmp_path / 'btrfsmaintenance'
+    path.write_text(MAINTENANCE)
+    return path
+
+
+@pytest.fixture
+def launch(address, bus, polkit, snapper, runtime, systemctl, maintenance, tmp_path):
     processes = []
     mountinfo = tmp_path / 'mountinfo'
     mountinfo.write_text(MOUNTINFO)
 
-    def launch(uid=USER.pw_uid, idle=None):
+    def launch(uid=USER.pw_uid, idle=None, extra=()):
         code = [
-            'from wisp_helper import __main__, layout, polkit, service, snapper',
+            'from wisp_helper import __main__, layout, maintenance, polkit, service, snapper',
             f'snapper.SNAPPER = {str(snapper.path)!r}',
             f'snapper.RUNTIME_DIR = {str(runtime)!r}',
             f'layout.MOUNTINFO = {str(mountinfo)!r}',
+            f'maintenance.PATHS = ({str(maintenance)!r},)',
+            f'maintenance.SYSTEMCTL = {str(systemctl.path)!r}',
         ]
         if uid is not None:
             code.append(f'polkit.caller_uid = lambda bus, sender: {uid}')
         if idle:
             code.append(f'service.IDLE = {idle}')
+        code.extend(extra)
         code.append('__main__.main()')
         process = spawn(address, '-c', '\n'.join(code))
         processes.append(process)
@@ -243,12 +284,15 @@ def test_version(bus, helper):
     assert request(bus, NAME, PATH, properties, 'Get', args, '(v)') == (1,)
 
 
-def test_info(bus, helper):
+def test_info(bus, helper, maintenance):
     (info,) = request(bus, NAME, PATH, NAME, 'GetInfo')
     assert info.keys() == {'version', 'distro', 'maintenance'}
     assert info['version'] == VERSION
     assert info['distro']
-    assert isinstance(info['maintenance'], bool)
+    assert info['maintenance'] is True
+    maintenance.unlink()
+    (info,) = request(bus, NAME, PATH, NAME, 'GetInfo')
+    assert info['maintenance'] is False
 
 
 @pytest.mark.parametrize('method', ACTIONS)
@@ -257,9 +301,9 @@ def test_not_authorized(bus, helper, method):
 
 
 def test_authorized(bus, helper, polkit):
-    polkit.allow('set-maintenance')
-    assert refusal(bus, 'SetMaintenance') == 'Unsupported'
-    assert refusal(bus, 'Rollback') == 'NotAuthorized'
+    polkit.allow('rollback')
+    assert refusal(bus, 'Rollback') == 'Unsupported'
+    assert refusal(bus, 'SetMaintenance') == 'NotAuthorized'
 
 
 def test_polkit_request(bus, helper, polkit):
@@ -497,3 +541,58 @@ def test_undo_change_failed(bus, helper, polkit, snapper, runtime):
     assert remote_error(info.value) == 'Failed'
     assert info.value.message.endswith(": File '/etc/hostname' not found.")
     assert list(runtime.iterdir()) == []
+
+
+def test_set_maintenance(bus, helper, polkit, snapper, systemctl, maintenance):
+    polkit.allow('set-maintenance')
+    call(bus, 'SetMaintenance', {'BTRFS_SCRUB_PERIOD': 'weekly', 'BTRFS_TRIM_PERIOD': 'none'})
+    text = MAINTENANCE.replace('"monthly"', '"weekly"') + 'BTRFS_TRIM_PERIOD="none"\n'
+    assert maintenance.read_text() == text
+    assert systemctl.calls() == [REFRESH]
+    assert snapper.calls() == []
+
+
+@pytest.mark.parametrize(
+    'values',
+    [{}, {'BTRFS_SCRUB_MOUNTPOINTS': '/home'}, {'BTRFS_SCRUB_PERIOD': 'monthly"; id; "'}],
+)
+def test_set_maintenance_invalid(bus, helper, polkit, systemctl, maintenance, values):
+    polkit.allow('set-maintenance')
+    assert refusal(bus, 'SetMaintenance', values) == 'Invalid'
+    assert polkit.calls() == []
+    assert maintenance.read_text() == MAINTENANCE
+    assert systemctl.calls() == []
+
+
+def test_set_maintenance_unsupported(bus, helper, polkit, systemctl, maintenance):
+    maintenance.unlink()
+    polkit.allow('set-maintenance')
+    assert refusal(bus, 'SetMaintenance') == 'Unsupported'
+    assert polkit.calls() == []
+    assert systemctl.calls() == []
+
+
+def test_set_maintenance_no_systemctl(bus, launch, polkit, maintenance):
+    launch(extra=['maintenance.SYSTEMCTL = None'])
+    polkit.allow('set-maintenance')
+    assert refusal(bus, 'SetMaintenance') == 'Unsupported'
+    assert polkit.calls() == []
+    assert maintenance.read_text() == MAINTENANCE
+
+
+def test_set_maintenance_not_authorized(bus, helper, systemctl, maintenance):
+    assert refusal(bus, 'SetMaintenance') == 'NotAuthorized'
+    assert maintenance.read_text() == MAINTENANCE
+    assert systemctl.calls() == []
+
+
+# The file is already written when the timers are made again.
+def test_set_maintenance_failed(bus, helper, polkit, systemctl, maintenance):
+    systemctl.set(fail='Unit btrfsmaintenance-refresh.service not found.')
+    polkit.allow('set-maintenance')
+    with pytest.raises(GLib.Error) as info:
+        call(bus, 'SetMaintenance', {'BTRFS_SCRUB_PERIOD': 'weekly'})
+    assert remote_error(info.value) == 'Failed'
+    assert info.value.message.endswith(': Unit btrfsmaintenance-refresh.service not found.')
+    assert maintenance.read_text() == MAINTENANCE.replace('"monthly"', '"weekly"')
+    assert systemctl.calls() == [REFRESH]

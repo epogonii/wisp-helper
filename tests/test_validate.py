@@ -123,6 +123,43 @@ def test_settings_refused(values):
         validate.settings(values)
 
 
+@pytest.mark.parametrize(
+    'values',
+    [
+        {'BTRFS_SCRUB_PERIOD': 'monthly'},
+        {'BTRFS_BALANCE_PERIOD': 'none', 'BTRFS_DEFRAG_PERIOD': 'daily'},
+        {'BTRFS_TRIM_PERIOD': 'weekly'},
+    ],
+)
+def test_periods(values):
+    assert validate.periods(values) == values
+
+
+@pytest.mark.parametrize(
+    'values',
+    [
+        {},
+        {'BTRFS_SCRUB_MOUNTPOINTS': 'monthly'},
+        {'BTRFS_LOG_OUTPUT': 'none'},
+        {'btrfs_scrub_period': 'monthly'},
+        {'NUMBER_LIMIT': 'none'},
+        {'BTRFS_SCRUB_PERIOD': ''},
+        {'BTRFS_SCRUB_PERIOD': 'hourly'},
+        {'BTRFS_SCRUB_PERIOD': 'Monthly'},
+        {'BTRFS_SCRUB_PERIOD': 'monthly '},
+        {'BTRFS_SCRUB_PERIOD': 'Sun *-*-* 03:00'},
+        {'BTRFS_SCRUB_PERIOD': 'monthly\nBTRFS_LOG_OUTPUT=x'},
+        {'BTRFS_SCRUB_PERIOD': 'monthly"; id; "'},
+        {'BTRFS_SCRUB_PERIOD': '$(id)'},
+        {'BTRFS_SCRUB_PERIOD': '`id`'},
+        {'BTRFS_TRIM_PERIOD': 'weekly', 'BTRFS_SCRUB_PERIOD': 'yearly'},
+    ],
+)
+def test_periods_refused(values):
+    with pytest.raises(errors.Invalid):
+        validate.periods(values)
+
+
 def test_new_subvolume():
     assert validate.new_subvolume('/srv', ['/home', '/srv']) == '/srv'
     with pytest.raises(errors.Invalid):
