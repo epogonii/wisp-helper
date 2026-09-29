@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+[Unit]
+Description=Wisp helper for snapper
+Documentation=https://github.com/epogonii/wisp-helper
+
+[Service]
+Type=dbus
+BusName=io.github.epogonii.WispHelper
+ExecStart=@libexecdir@/wisp-helper
+RuntimeDirectory=wisp-helper
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+PrivateTmp=yes
+PrivateMounts=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+# ProtectSystem, ProtectHome, RestrictSUIDSGID and PrivateDevices break
+# undochange or the swap rollback.

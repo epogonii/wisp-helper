@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+[D-BUS Service]
+Name=io.github.epogonii.WispHelper
+Exec=/bin/false
+User=root
+SystemdService=wisp-helper.service

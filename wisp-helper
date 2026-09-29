@@ -1,0 +1,8 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+import sys
+
+from wisp_helper.__main__ import main
+
+sys.exit(main())

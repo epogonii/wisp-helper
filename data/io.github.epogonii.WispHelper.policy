@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- SPDX-License-Identifier: GPL-2.0-or-later -->
+<policyconfig>
+  <vendor>Wisp</vendor>
+  <vendor_url>https://github.com/epogonii/wisp-helper</vendor_url>
+
+  <action id="io.github.epogonii.WispHelper.grant-access">
+    <description>Let an account use snapper snapshots</description>
+    <message>Authentication is required to let this account use snapper snapshots</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
+  <action id="io.github.epogonii.WispHelper.set-config">
+    <description>Change the settings of a snapper config</description>
+    <message>Authentication is required to change the settings of a snapper config</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
+  <action id="io.github.epogonii.WispHelper.create-config">
+    <description>Create a snapper config</description>
+    <message>Authentication is required to create a snapper config</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
+  <action id="io.github.epogonii.WispHelper.delete-config">
+    <description>Delete a snapper config and its snapshots</description>
+    <message>Authentication is required to delete a snapper config and all of its snapshots</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+
+  <action id="io.github.epogonii.WispHelper.undo-change">
+    <description>Restore files from a snapshot</description>
+    <message>Authentication is required to restore files from a snapshot</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
+  <action id="io.github.epogonii.WispHelper.rollback">
+    <description>Roll the system back to a snapshot</description>
+    <message>Authentication is required to roll the system back to a snapshot</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+
+  <action id="io.github.epogonii.WispHelper.set-maintenance">
+    <description>Change when btrfs maintenance runs</description>
+    <message>Authentication is required to change when btrfs maintenance runs</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+</policyconfig>

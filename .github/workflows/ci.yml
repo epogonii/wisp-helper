@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: registry.fedoraproject.org/fedora:45
+    steps:
+      - name: Install tools
+        run: dnf -y install git meson python3-gobject-base python3-pytest ruff
+
+      - uses: actions/checkout@v5
+
+      - name: Lint
+        run: |
+          ruff check
+          ruff format --check
+
+      - name: Build and test
+        run: |
+          meson setup build --prefix=/usr
+          meson test -C build --print-errorlogs
+
+      - name: Check the installed layout
+        run: |
+          DESTDIR="$PWD/dest" meson install -C build
+          find dest -type f | sort
+          test -x dest/usr/libexec/wisp-helper
+          test -f dest/usr/share/dbus-1/system-services/io.github.epogonii.WispHelper.service
+          test -f dest/usr/share/dbus-1/system.d/io.github.epogonii.WispHelper.conf
+          test -f dest/usr/share/polkit-1/actions/io.github.epogonii.WispHelper.policy
+          grep -qx 'ExecStart=/usr/libexec/wisp-helper' dest/usr/lib/systemd/system/wisp-helper.service
+          test -f dest/usr/lib/python3*/site-packages/wisp_helper/__init__.py
