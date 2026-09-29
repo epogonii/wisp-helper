@@ -149,10 +149,11 @@ def test_short(paths, found):
 # btrfs prints the name as it is, and D-Bus takes only UTF-8.
 def test_plan_nested_not_utf8(system):
     inodes, _ = system
-    inodes['other'].append('var/tmp/a\udcff')
+    # Names that differ only in such bytes look the same.
+    inodes['other'] += ['var/tmp/a\udcff', 'var/tmp/a\udcfe']
     with pytest.raises(swap.Refused) as info:
         plan()
-    assert info.value.names == ['var/tmp/a\ufffd']
+    assert (info.value.names, info.value.more) == (['var/tmp/a\ufffd'], 0)
     assert str(info.value).endswith(': var/tmp/a\ufffd')
 
 

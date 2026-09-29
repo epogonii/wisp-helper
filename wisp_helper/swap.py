@@ -121,9 +121,8 @@ def plan(number, now, current_kernel):
     # Any other would stay in the backup, with an empty directory for it in the new root.
     left = sorted(set(children(subvolume)) - set(moved))
     if left:
-        names, more = short(left)
         # Anybody can make a subvolume in /var/tmp, with any name.
-        names = [printable(name) for name in names]
+        names, more = short(printable(name) for name in left)
         listed = ', '.join(names) + (f' and {more} more' if more else '')
         raise Refused('nested', f'subvolumes in the root would stay behind: {listed}', names, more)
 
