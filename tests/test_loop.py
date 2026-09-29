@@ -268,7 +268,7 @@ def test_swap_number_taken(image):
     build(tmp_path, mount, unmount, 'snapshot')
     plan = swap.plan(5, NOW, lambda: None)
     (tmp_path / 'sysroot/.snapshots/6').mkdir()
-    with pytest.raises(swap.Failed, match='File exists.*Nothing was changed.$'):
+    with pytest.raises(swap.Failed, match='File exists.*Everything was put back.$'):
         swap.execute(plan)
     setup = tmp_path / 'setup'
     mount('subvolid=5', setup)

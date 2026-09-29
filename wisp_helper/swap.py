@@ -235,9 +235,23 @@ def swap(top, plan):
             raise Failed(f'{at(name)} is in the way')
     previous = default_kernel() if plan.kernel else None
 
-    # The number is taken and the copy made before anything is renamed, so a
-    # failure up to there leaves the system as it was.
+    # Nothing is renamed until the rest is done, so a failure before that
+    # leaves the system as it was. Putting back stops at an undo that fails,
+    # which is likely for whatever btrfs left when it failed. So the copy
+    # goes first and grubby last.
     steps = [
+        (
+            f'snapshot {snapshot} as {fresh}',
+            lambda: copy(at(f'{sub}/{snapshot}'), at(fresh)),
+            lambda: run([BTRFS, 'subvolume', 'delete', at(fresh)], timeout=None),
+        )
+    ]
+    # Deleting the copy takes these along, so they have nothing to undo.
+    for path in plan.stand_ins:
+        steps.append(
+            (f'rmdir {fresh}/{path}', lambda path=path: os.rmdir(at(f'{fresh}/{path}')), None)
+        )
+    steps += [
         (f'mkdir {backup}', lambda: os.mkdir(backup), lambda: os.rmdir(backup)),
         (
             f'write {backup}/info.xml',
@@ -254,18 +268,6 @@ def swap(top, plan):
                 ),
                 lambda: run([GRUBBY, '--set-default', previous], timeout=None),
             )
-        )
-    steps.append(
-        (
-            f'snapshot {snapshot} as {fresh}',
-            lambda: copy(at(f'{sub}/{snapshot}'), at(fresh)),
-            lambda: run([BTRFS, 'subvolume', 'delete', at(fresh)], timeout=None),
-        )
-    )
-    # Deleting the copy takes these along, so they have nothing to undo.
-    for path in plan.stand_ins:
-        steps.append(
-            (f'rmdir {fresh}/{path}', lambda path=path: os.rmdir(at(f'{fresh}/{path}')), None)
         )
     renames = [(sub, kept), (fresh, sub)]
     renames += [(f'{kept}/{path}', f'{sub}/{path}') for path in plan.moved]
@@ -294,7 +296,8 @@ def swap(top, plan):
 
 def put_back(problem, done):
     undone = False
-    for name, undo in reversed(done):
+    for index in reversed(range(len(done))):
+        name, undo = done[index]
         if undo is None:
             continue
         log.info('Rollback: undoing %s', name)
@@ -302,10 +305,9 @@ def put_back(problem, done):
             undo()
             undone = True
         except Exception as error:
-            raise Failed(
-                f'{problem}. Undoing "{name}" failed too: {error}. '
-                'What came before it is still done.'
-            ) from None
+            left = [step for step, back in done[:index] if back is not None]
+            rest = f'Not undone either: {"; ".join(left)}.' if left else 'Nothing else was changed.'
+            raise Failed(f'{problem}. Undoing "{name}" failed too: {error}. {rest}') from None
     raise Failed(
         f'{problem}. ' + ('Everything was put back.' if undone else 'Nothing was changed.')
     )

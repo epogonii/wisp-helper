@@ -285,26 +285,31 @@ def test_copy_there(tmp_path):
     assert (tmp_path / 'copy').exists()
 
 
-# The copy btrfs made before failing goes back with the rest, or is named
-# when it cannot.
+# The copy btrfs made before failing goes back, or is all there is left when
+# it cannot. The kernel stays as it was either way.
 @pytest.mark.parametrize(
-    'delete, end, left, snapshots',
+    'delete, end, left',
     [
-        ('/bin/rmdir "$3"', 'Everything was put back.', ['root'], ['5']),
+        ('/bin/rmdir "$3"', 'Everything was put back.', ['root']),
         (
             'echo "ERROR: busy" >&2; exit 1',
-            'failed too: ERROR: busy. What came before it is still done.',
+            'failed too: ERROR: busy. Nothing else was changed.',
             ['root', 'root.20260929-120005.new'],
-            ['11', '5'],
         ),
     ],
 )
-def test_swap_copy_failed(tmp_path, monkeypatch, delete, end, left, snapshots):
+def test_swap_copy_failed(tmp_path, monkeypatch, delete, end, left):
     fake_btrfs(tmp_path, monkeypatch, delete)
+    grubby = tmp_path / 'grubby'
+    grubby.write_text(f'#!/bin/sh\necho "$@" >> {tmp_path}/grubby.log\necho /boot/vmlinuz-7.2.8\n')
+    grubby.chmod(0o755)
+    monkeypatch.setattr(swap, 'GRUBBY', str(grubby))
     monkeypatch.setattr(swap, 'same', lambda path, running: None)
     top = tmp_path / 'top'
     (top / 'root/.snapshots/5/snapshot').mkdir(parents=True)
-    found = swap.Plan('/dev/vda3', 'root', 5, 11, '', ['.snapshots'], [], '20260929-120005', INFO)
+    found = swap.Plan(
+        '/dev/vda3', 'root', 5, 11, '7.2.7', ['.snapshots'], [], '20260929-120005', INFO
+    )
     with pytest.raises(swap.Failed) as info:
         swap.swap(str(top), found)
     message = str(info.value)
@@ -313,4 +318,27 @@ def test_swap_copy_failed(tmp_path, monkeypatch, delete, end, left, snapshots):
     )
     assert message.endswith(end)
     assert sorted(os.listdir(top)) == left
-    assert sorted(os.listdir(top / 'root/.snapshots')) == snapshots
+    assert os.listdir(top / 'root/.snapshots') == ['5']
+    assert (tmp_path / 'grubby.log').read_text().splitlines() == ['--default-kernel']
+
+
+# An undo that fails stops the rest, which is named.
+def test_put_back_stops():
+    undone = []
+
+    def fail():
+        raise OSError(30, 'Read-only file system')
+
+    done = [
+        ('mkdir 11', lambda: undone.append('mkdir 11')),
+        ('rmdir new/.snapshots', None),
+        ('write 11/info.xml', fail),
+        ('grubby', lambda: undone.append('grubby')),
+    ]
+    with pytest.raises(swap.Failed) as info:
+        swap.put_back('mv root root.old failed: busy', done)
+    assert str(info.value) == (
+        'mv root root.old failed: busy. Undoing "write 11/info.xml" failed too: '
+        '[Errno 30] Read-only file system. Not undone either: mkdir 11.'
+    )
+    assert undone == ['grubby']
