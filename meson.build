@@ -55,5 +55,6 @@ if pytest.found()
   test('pytest', pytest,
     args: ['-q', '-p', 'no:cacheprovider', meson.project_source_root() / 'tests'],
     workdir: meson.project_source_root(),
+    timeout: 120,
   )
 endif

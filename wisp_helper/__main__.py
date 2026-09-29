@@ -1,8 +1,27 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+import logging
+
+from gi.repository import Gio, GLib
+
+from wisp_helper import NAME
+from wisp_helper.service import Service
+
 
 def main():
-    raise SystemExit('wisp-helper: not written yet')
+    logging.basicConfig(format='%(message)s', level=logging.INFO)
+    loop = GLib.MainLoop()
+    service = Service(loop.quit)
+    owner = Gio.bus_own_name(
+        Gio.BusType.SYSTEM,
+        NAME,
+        Gio.BusNameOwnerFlags.NONE,
+        service.register,
+        None,
+        lambda *args: loop.quit(),
+    )
+    loop.run()
+    Gio.bus_unown_name(owner)
 
 
 if __name__ == '__main__':

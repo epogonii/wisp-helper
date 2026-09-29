@@ -13,7 +13,7 @@ jobs:
     container: registry.fedoraproject.org/fedora:45
     steps:
       - name: Install tools
-        run: dnf -y install git meson python3-gobject-base python3-pytest ruff
+        run: dnf -y install dbus-daemon git meson python3-dbusmock python3-gobject-base python3-pytest ruff
 
       - uses: actions/checkout@v5
 
@@ -25,7 +25,7 @@ jobs:
       - name: Build and test
         run: |
           meson setup build --prefix=/usr
-          meson test -C build --print-errorlogs
+          meson test -C build --print-errorlogs -v
 
       - name: Check the installed layout
         run: |
