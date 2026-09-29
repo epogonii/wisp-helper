@@ -201,7 +201,7 @@ def test_swap_in_the_way(image):
     mount('subvolid=5', setup)
     (setup / f'root.{plan.stamp}.new').mkdir()
     unmount(setup)
-    with pytest.raises(swap.Failed, match='is in the way$'):
+    with pytest.raises(swap.Failed, match=f'^root.{plan.stamp}.new is in the way$'):
         swap.execute(plan)
     mount('subvolid=5', setup)
     assert sorted(os.listdir(setup)) == ['home', 'root', f'root.{plan.stamp}.new']
@@ -215,7 +215,7 @@ def test_swap_other_root(image):
     plan = swap.plan(5, NOW, lambda: None)
     unmount(tmp_path / 'sysroot')
     mount('subvol=home', tmp_path / 'sysroot')
-    with pytest.raises(swap.Failed, match='/root is not /$'):
+    with pytest.raises(swap.Failed, match='^root is not /$'):
         swap.execute(plan)
     check = tmp_path / 'check'
     mount('subvolid=5', check)
@@ -270,7 +270,8 @@ def test_swap_number_taken(image):
     (tmp_path / 'sysroot/.snapshots/6').mkdir()
     with pytest.raises(
         swap.Failed,
-        match='^mkdir root/.snapshots/6 failed: .*File exists.*Everything was put back.$',
+        match=r"^mkdir root/.snapshots/6 failed: \[Errno 17\] File exists: 'root/.snapshots/6'. "
+        'Everything was put back.$',
     ):
         swap.execute(plan)
     setup = tmp_path / 'setup'

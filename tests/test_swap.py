@@ -345,6 +345,33 @@ def test_swap_write_failed(tmp_path, monkeypatch):
     assert os.listdir(top / 'root/.snapshots') == ['5']
 
 
+# Errors name paths in the filesystem, not under the mount point.
+def test_execute_names(tmp_path, monkeypatch):
+    run = tmp_path / 'run'
+    run.mkdir()
+    monkeypatch.setattr(swap, 'RUNTIME_DIR', str(run))
+    tools = {
+        # A timeline snapshot took the number.
+        'mount': '/bin/mkdir -p "$6/root/.snapshots/5/snapshot" "$6/root/.snapshots/11"',
+        'umount': '/bin/rm -r "$1"/*',
+        'btrfs': '[ "$2" = snapshot ] && /bin/mkdir "$4"; [ "$2" = delete ] && /bin/rmdir "$3"; :',
+    }
+    for name, script in tools.items():
+        tool = tmp_path / name
+        tool.write_text(f'#!/bin/sh\n{script}\n')
+        tool.chmod(0o755)
+        monkeypatch.setattr(swap, name.upper(), str(tool))
+    monkeypatch.setattr(swap, 'same', lambda path, running: None)
+    found = swap.Plan('/dev/vda3', 'root', 5, 11, '', ['.snapshots'], [], '20260929-120005', INFO)
+    with pytest.raises(swap.Failed) as info:
+        swap.execute(found)
+    assert str(info.value) == (
+        "mkdir root/.snapshots/11 failed: [Errno 17] File exists: 'root/.snapshots/11'. "
+        'Everything was put back.'
+    )
+    assert os.listdir(run) == []
+
+
 # An undo that fails stops the rest, which is named.
 def test_put_back_stops():
     undone = []

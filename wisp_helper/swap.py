@@ -203,6 +203,9 @@ def execute(plan):
         run([MOUNT, '-t', 'btrfs', '-o', 'subvolid=5', plan.source, top], timeout=None)
         try:
             swap(top, plan)
+        except Failed as error:
+            # The mount point is gone by the time anybody reads this.
+            raise Failed(str(error).replace(f'{top}/', '')) from None
         finally:
             unmount(top)
     finally:
