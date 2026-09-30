@@ -909,7 +909,7 @@ def test_pending_unknown(bus, helper, polkit, snapper):
     polkit.allow('grant-access')
     assert call(bus, 'GrantAccess', 'home') == ()
     assert snapper.calls()[:2] == [LIST, DEFAULT]
-    assert snapper.configs()['home']['ALLOW_USERS'] == 'nobody'
+    assert snapper.configs()['home']['ALLOW_USERS'] == USER.pw_name
 
 
 def test_rollback_mark_failed(bus, launch, polkit, runtime):
