@@ -8,8 +8,8 @@ that part of Wisp lives here. wisp-helper is a system D-Bus service. D-Bus
 starts it on the first call from Wisp, and it exits after a minute of idle.
 Anything that changes the system goes through polkit first.
 
-Work in progress. There is no release or package yet, and Wisp doesn't use it
-yet.
+Version 0.1.0 is packaged for Fedora and openSUSE. Wisp doesn't use it yet,
+that comes with Wisp 1.1.0.
 
 ## What it does
 
@@ -28,15 +28,22 @@ every time, the rest is remembered for a few minutes.
 
 ## Install
 
-Fedora 43 or newer, from [COPR](https://copr.fedorainfracloud.org/coprs/swink/wisp-helper/)
-(nothing built there yet):
+Fedora 43 or newer, from [COPR](https://copr.fedorainfracloud.org/coprs/swink/wisp-helper/):
 
 ```sh
 sudo dnf copr enable swink/wisp-helper
 sudo dnf install wisp-helper
 ```
 
-openSUSE Tumbleweed and Leap 16.0 will get a package on OBS, Arch later.
+openSUSE Tumbleweed, from [OBS](https://build.opensuse.org/package/show/home:swink/wisp-helper):
+
+```sh
+sudo zypper addrepo https://download.opensuse.org/repositories/home:swink/openSUSE_Tumbleweed/home:swink.repo
+sudo zypper install wisp-helper
+```
+
+On Leap 16.0 use `16.0` in the URL instead of `openSUSE_Tumbleweed`. Arch comes
+later.
 
 From source with meson. Use `--prefix=/usr`, polkit and the system bus don't
 read files from `/usr/local`.
