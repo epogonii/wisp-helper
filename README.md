@@ -48,8 +48,14 @@ sudo zypper addrepo https://download.opensuse.org/repositories/home:swink/openSU
 sudo zypper install wisp-helper
 ```
 
-On Leap 16.0 use `16.0` in the URL instead of `openSUSE_Tumbleweed`. Arch comes
-later.
+openSUSE Leap 16.0:
+
+```sh
+sudo zypper addrepo https://download.opensuse.org/repositories/home:swink/16.0/home:swink.repo
+sudo zypper install wisp-helper
+```
+
+Arch comes later.
 
 From source with meson. Use `--prefix=/usr`, polkit and the system bus don't
 read files from `/usr/local`.
