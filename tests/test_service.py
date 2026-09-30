@@ -20,8 +20,17 @@ ROOT = Path(__file__).resolve().parent.parent
 POLKIT = 'org.freedesktop.PolicyKit1'
 AUTHORITY = '/org/freedesktop/PolicyKit1/Authority'
 
-# Who the helper thinks is calling, in all tests but one.
-USER = pwd.getpwnam('nobody')
+
+# Who the helper thinks is calling, in all tests but one. OBS build roots
+# have no nobody.
+def other_user():
+    try:
+        return pwd.getpwnam('nobody')
+    except KeyError:
+        return next(user for user in pwd.getpwall() if user.pw_uid != 0)
+
+
+USER = other_user()
 
 LIST = ['--jsonout', 'list-configs']
 GET = ['--jsonout', '-c', 'root', 'get-config']
@@ -425,13 +434,13 @@ def test_no_exit_during_polkit_check(bus, launch, polkit):
 def test_grant_access(bus, helper, polkit, snapper):
     polkit.allow('grant-access')
     assert call(bus, 'GrantAccess') == ()
-    set_config = ['-c', 'root', 'set-config', 'ALLOW_USERS=nobody', 'SYNC_ACL=yes']
+    set_config = ['-c', 'root', 'set-config', f'ALLOW_USERS={USER.pw_name}', 'SYNC_ACL=yes']
     assert snapper.calls() == [LIST, DEFAULT, GET, set_config]
-    assert snapper.configs()['root']['ALLOW_USERS'] == 'nobody'
+    assert snapper.configs()['root']['ALLOW_USERS'] == USER.pw_name
 
 
 def test_grant_access_again(bus, helper, polkit, snapper):
-    snapper.set({'root': {'SUBVOLUME': '/', 'ALLOW_USERS': 'nobody', 'SYNC_ACL': 'yes'}})
+    snapper.set({'root': {'SUBVOLUME': '/', 'ALLOW_USERS': USER.pw_name, 'SYNC_ACL': 'yes'}})
     polkit.allow('grant-access')
     call(bus, 'GrantAccess')
     assert snapper.calls() == [LIST, DEFAULT, GET]
