@@ -15,8 +15,7 @@ that part of Wisp lives here. wisp-helper is a system D-Bus service. D-Bus
 starts it on the first call from Wisp, and it exits after a minute of idle.
 Anything that changes the system goes through polkit first.
 
-Version 0.1.0 is packaged for Fedora and openSUSE. Wisp doesn't use it yet,
-that comes with Wisp 1.1.0.
+Version 0.1.0 is packaged for Fedora and openSUSE. Wisp 1.1.0 and newer use it.
 
 ## What it does
 
