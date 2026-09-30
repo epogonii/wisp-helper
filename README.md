@@ -1,4 +1,11 @@
-# wisp-helper
+<h1 align="center">wisp-helper</h1>
+
+<p align="center">
+  <a href="https://github.com/epogonii/wisp-helper/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/epogonii/wisp-helper/ci.yml?branch=main&label=CI&logo=github"></a>
+  <a href="https://copr.fedorainfracloud.org/coprs/swink/wisp-helper/"><img alt="COPR" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcopr.fedorainfracloud.org%2Fapi_3%2Fpackage%2F%3Fownername%3Dswink%26projectname%3Dwisp-helper%26packagename%3Dwisp-helper%26with_latest_build%3DTrue&query=%24.builds.latest.state&label=COPR&logo=fedora&logoColor=white&color=51a2da"></a>
+  <a href="https://build.opensuse.org/package/show/home:swink/wisp-helper"><img alt="OBS" src="https://img.shields.io/obs/home:swink/wisp-helper/openSUSE_Tumbleweed/x86_64?label=OBS&logo=opensuse&logoColor=white"></a>
+  <img alt="License GPL-2.0-or-later" src="https://img.shields.io/badge/license-GPL--2.0--or--later-8f33c7">
+</p>
 
 Helper for [Wisp](https://github.com/epogonii/wisp), the snapper extension for
 GNOME Shell. It does the things that need root.
